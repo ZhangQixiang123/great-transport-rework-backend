@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var lookPath = exec.LookPath
+
 type config struct {
 	channelID    string
 	videoID      string
@@ -21,6 +23,8 @@ type config struct {
 	outputDir    string
 	limit        int
 	sleepSeconds int
+	jsRuntime    string
+	format       string
 }
 
 type uploader interface {
@@ -44,7 +48,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
+	if _, err := lookPath("yt-dlp"); err != nil {
 		log.Fatal("yt-dlp not found in PATH; install it first (see README for Docker setup)")
 	}
 
@@ -60,8 +64,17 @@ func main() {
 		targetURL = videoURL(cfg.videoID)
 	}
 
+	jsRuntime, err := resolveJSRuntime(cfg.jsRuntime)
+	if err != nil {
+		log.Fatal(err)
+	}
+	format, warn := determineFormat(cfg.format)
+	if warn != "" {
+		log.Println(warn)
+	}
+
 	ctx := context.Background()
-	downloaded, err := download(ctx, targetURL, cfg.outputDir, cfg.limit, time.Duration(cfg.sleepSeconds)*time.Second, isChannel)
+	downloaded, err := download(ctx, targetURL, cfg.outputDir, cfg.limit, time.Duration(cfg.sleepSeconds)*time.Second, isChannel, jsRuntime, format)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,14 +91,22 @@ func main() {
 }
 
 func parseFlags() (config, error) {
+	return parseFlagsFrom(flag.CommandLine, os.Args[1:])
+}
+
+func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	var cfg config
-	flag.StringVar(&cfg.channelID, "channel-id", "", "YouTube channel ID or URL")
-	flag.StringVar(&cfg.videoID, "video-id", "", "YouTube video ID or URL")
-	flag.StringVar(&cfg.platform, "platform", "bilibili", "target platform (bilibili or tiktok)")
-	flag.StringVar(&cfg.outputDir, "output", "downloads", "output directory")
-	flag.IntVar(&cfg.limit, "limit", 5, "max videos to download for channel")
-	flag.IntVar(&cfg.sleepSeconds, "sleep-seconds", 5, "sleep seconds between downloads")
-	flag.Parse()
+	fs.StringVar(&cfg.channelID, "channel-id", "", "YouTube channel ID or URL")
+	fs.StringVar(&cfg.videoID, "video-id", "", "YouTube video ID or URL")
+	fs.StringVar(&cfg.platform, "platform", "bilibili", "target platform (bilibili or tiktok)")
+	fs.StringVar(&cfg.outputDir, "output", "downloads", "output directory")
+	fs.IntVar(&cfg.limit, "limit", 5, "max videos to download for channel")
+	fs.IntVar(&cfg.sleepSeconds, "sleep-seconds", 5, "sleep seconds between downloads")
+	fs.StringVar(&cfg.jsRuntime, "js-runtime", "auto", "JS runtime passed to yt-dlp (auto,node,deno,...)")
+	fs.StringVar(&cfg.format, "format", "auto", "yt-dlp format selector (auto picks best available for the environment)")
+	if err := fs.Parse(args); err != nil {
+		return cfg, err
+	}
 
 	if cfg.channelID == "" && cfg.videoID == "" {
 		return cfg, errors.New("provide either --channel-id or --video-id")
@@ -110,6 +131,47 @@ func parseFlags() (config, error) {
 	return cfg, nil
 }
 
+func resolveJSRuntime(preferred string) (string, error) {
+	candidates := []string{}
+	for _, part := range strings.Split(strings.ToLower(strings.TrimSpace(preferred)), ",") {
+		part = strings.TrimSpace(part)
+		if part != "" && part != "auto" {
+			candidates = append(candidates, part)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = []string{"node", "deno"}
+	}
+	for _, candidate := range candidates {
+		if hasExecutable(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no supported JS runtime found (tried %s)", strings.Join(candidates, ", "))
+}
+
+func determineFormat(selection string) (string, string) {
+	value := strings.TrimSpace(selection)
+	if value != "" && value != "auto" {
+		if strings.Contains(value, "+") && !hasExecutable("ffmpeg") {
+			return value, "ffmpeg not found; yt-dlp may fail to merge formats requested via --format"
+		}
+		return value, ""
+	}
+	if hasExecutable("ffmpeg") {
+		return "bv*+ba/b", ""
+	}
+	return "", "ffmpeg not found; falling back to single-stream downloads. Install ffmpeg for merged video+audio output."
+}
+
+func hasExecutable(name string) bool {
+	if name == "" {
+		return false
+	}
+	_, err := lookPath(name)
+	return err == nil
+}
+
 func channelURL(input string) string {
 	if looksLikeURL(input) {
 		return input
@@ -128,13 +190,20 @@ func looksLikeURL(input string) bool {
 	return strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://")
 }
 
-func download(ctx context.Context, targetURL, outputDir string, limit int, sleep time.Duration, isChannel bool) ([]string, error) {
+func download(ctx context.Context, targetURL, outputDir string, limit int, sleep time.Duration, isChannel bool, jsRuntime, format string) ([]string, error) {
 	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
 	args := []string{
 		"--quiet",
 		"--no-warnings",
-		"--print", "%(filepath)s",
+		"--no-simulate",
+		"--print", "after_move:filepath",
 		"-o", outputTemplate,
+	}
+	if jsRuntime != "" {
+		args = append(args, "--js-runtimes", jsRuntime)
+	}
+	if format != "" {
+		args = append(args, "--format", format)
 	}
 	if sleep > 0 {
 		args = append(args,
