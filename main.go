@@ -2,19 +2,28 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
-var lookPath = exec.LookPath
+var (
+	lookPath        = exec.LookPath
+	ytDlpHelpRun    = func() ([]byte, error) { return exec.Command("yt-dlp", "--help").CombinedOutput() }
+	jsFlagOnce      sync.Once
+	jsFlagSupported bool
+	jsFlagErr       error
+)
 
 type config struct {
 	channelID    string
@@ -64,9 +73,12 @@ func main() {
 		targetURL = videoURL(cfg.videoID)
 	}
 
-	jsRuntime, err := resolveJSRuntime(cfg.jsRuntime)
+	jsRuntime, jsWarn, err := resolveDesiredJSRuntime(cfg.jsRuntime)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if jsWarn != "" {
+		log.Println(jsWarn)
 	}
 	format, warn := determineFormat(cfg.format)
 	if warn != "" {
@@ -131,6 +143,24 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	return cfg, nil
 }
 
+func resolveDesiredJSRuntime(pref string) (string, string, error) {
+	supported, err := jsRuntimeFlagSupported()
+	if err != nil {
+		return "", "", err
+	}
+	if !supported {
+		if runtimePrefIsAuto(pref) {
+			return "", "yt-dlp in PATH does not support --js-runtimes; continuing without explicit JS runtime", nil
+		}
+		return "", "", errors.New("--js-runtime requires yt-dlp 2024.04.09 or newer; update yt-dlp or remove the flag")
+	}
+	runtime, err := resolveJSRuntime(pref)
+	if err != nil {
+		return "", "", err
+	}
+	return runtime, "", nil
+}
+
 func resolveJSRuntime(preferred string) (string, error) {
 	candidates := []string{}
 	for _, part := range strings.Split(strings.ToLower(strings.TrimSpace(preferred)), ",") {
@@ -148,6 +178,11 @@ func resolveJSRuntime(preferred string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no supported JS runtime found (tried %s)", strings.Join(candidates, ", "))
+}
+
+func runtimePrefIsAuto(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	return v == "" || v == "auto"
 }
 
 func determineFormat(selection string) (string, string) {
@@ -172,6 +207,18 @@ func hasExecutable(name string) bool {
 	return err == nil
 }
 
+func jsRuntimeFlagSupported() (bool, error) {
+	jsFlagOnce.Do(func() {
+		out, err := ytDlpHelpRun()
+		if err != nil {
+			jsFlagErr = err
+			return
+		}
+		jsFlagSupported = strings.Contains(string(out), "--js-runtimes")
+	})
+	return jsFlagSupported, jsFlagErr
+}
+
 func channelURL(input string) string {
 	if looksLikeURL(input) {
 		return input
@@ -192,39 +239,66 @@ func looksLikeURL(input string) bool {
 
 func download(ctx context.Context, targetURL, outputDir string, limit int, sleep time.Duration, isChannel bool, jsRuntime, format string) ([]string, error) {
 	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
-	args := []string{
+	baseArgs := []string{
 		"--quiet",
 		"--no-warnings",
 		"--no-simulate",
+		"--remote-components", "ejs:github",
 		"--print", "after_move:filepath",
 		"-o", outputTemplate,
 	}
 	if jsRuntime != "" {
-		args = append(args, "--js-runtimes", jsRuntime)
+		baseArgs = append(baseArgs, "--js-runtimes", jsRuntime)
 	}
 	if format != "" {
-		args = append(args, "--format", format)
+		baseArgs = append(baseArgs, "--format", format)
 	}
 	if sleep > 0 {
-		args = append(args,
+		baseArgs = append(baseArgs,
 			fmt.Sprintf("--sleep-interval=%d", int(sleep.Seconds())),
 			fmt.Sprintf("--max-sleep-interval=%d", int(sleep.Seconds())+1),
 		)
 	}
 	if isChannel {
-		args = append(args, "--playlist-items", fmt.Sprintf("1:%d", limit))
+		baseArgs = append(baseArgs, "--playlist-items", fmt.Sprintf("1:%d", limit))
 	}
-	args = append(args, targetURL)
 
+	runWithExtras := func(extra []string) (ytDlpResult, error) {
+		args := make([]string, 0, len(baseArgs)+len(extra)+1)
+		args = append(args, baseArgs...)
+		args = append(args, extra...)
+		args = append(args, targetURL)
+		return runYtDlp(ctx, args)
+	}
+
+	res, err := runWithExtras(nil)
+	if shouldRetryWithDynamic(res.stderr, err) {
+		log.Println("yt-dlp indicated SABR fallback; retrying with --allow-dynamic-mpd --concurrent-fragments 1")
+		res, err = runWithExtras([]string{"--allow-dynamic-mpd", "--concurrent-fragments", "1"})
+	}
+	if err != nil {
+		return res.files, fmt.Errorf("yt-dlp failed: %w", err)
+	}
+
+	return res.files, nil
+}
+
+type ytDlpResult struct {
+	files  []string
+	stderr string
+}
+
+func runYtDlp(ctx context.Context, args []string) (ytDlpResult, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return ytDlpResult{}, err
 	}
-	cmd.Stderr = os.Stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return ytDlpResult{}, err
 	}
 
 	var files []string
@@ -235,12 +309,30 @@ func download(ctx context.Context, targetURL, outputDir string, limit int, sleep
 			files = append(files, line)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return files, err
+	if scanErr := scanner.Err(); scanErr != nil {
+		return ytDlpResult{files: files, stderr: stderrBuf.String()}, scanErr
 	}
 	if err := cmd.Wait(); err != nil {
-		return files, fmt.Errorf("yt-dlp failed: %w", err)
+		return ytDlpResult{files: files, stderr: stderrBuf.String()}, err
 	}
+	return ytDlpResult{files: files, stderr: stderrBuf.String()}, nil
+}
 
-	return files, nil
+func shouldRetryWithDynamic(stderr string, runErr error) bool {
+	if stderr == "" && runErr == nil {
+		return false
+	}
+	patterns := []string{
+		"fragment not found",
+		"Retrying fragment",
+		"SABR streaming",
+		"Some web client https formats have been skipped",
+		"HTTP Error 403",
+	}
+	for _, p := range patterns {
+		if strings.Contains(stderr, p) {
+			return true
+		}
+	}
+	return false
 }
