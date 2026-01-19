@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +29,8 @@ type config struct {
 	videoID      string
 	platform     string
 	outputDir    string
+	dbPath       string
+	httpAddr     string
 	limit        int
 	sleepSeconds int
 	jsRuntime    string
@@ -65,14 +66,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var targetURL string
-	isChannel := cfg.channelID != ""
-	if isChannel {
-		targetURL = channelURL(cfg.channelID)
-	} else {
-		targetURL = videoURL(cfg.videoID)
-	}
-
 	jsRuntime, jsWarn, err := resolveDesiredJSRuntime(cfg.jsRuntime)
 	if err != nil {
 		log.Fatal(err)
@@ -86,19 +79,45 @@ func main() {
 	}
 
 	ctx := context.Background()
-	downloaded, err := download(ctx, targetURL, cfg.outputDir, cfg.limit, time.Duration(cfg.sleepSeconds)*time.Second, isChannel, jsRuntime, format)
+	store, err := NewSQLiteStore(cfg.dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if len(downloaded) == 0 {
-		log.Fatal("no files downloaded; check the ID and try again")
+	if err := store.EnsureSchema(ctx); err != nil {
+		log.Fatal(err)
 	}
 
+	downloader := &ytDlpDownloader{
+		sleep: time.Duration(cfg.sleepSeconds) * time.Second,
+	}
 	up := dummyUploader{platform: cfg.platform}
-	for _, path := range downloaded {
-		if err := up.Upload(path); err != nil {
-			log.Printf("upload failed for %s: %v", path, err)
+	controller := &Controller{
+		Downloader: downloader,
+		Uploader:   up,
+		Store:      store,
+		OutputDir:  cfg.outputDir,
+		JSRuntime:  jsRuntime,
+		Format:     format,
+	}
+
+	if cfg.httpAddr != "" {
+		if err := serveHTTP(cfg.httpAddr, controller); err != nil {
+			log.Fatal(err)
 		}
+		return
+	}
+
+	switch {
+	case cfg.channelID != "":
+		if _, err := controller.SyncChannel(ctx, cfg.channelID, cfg.limit); err != nil {
+			log.Fatal(err)
+		}
+	case cfg.videoID != "":
+		if err := controller.SyncVideo(ctx, cfg.videoID); err != nil {
+			log.Fatal(err)
+		}
+	default:
+		log.Fatal("no channel or video provided; use --http-addr for server mode")
 	}
 }
 
@@ -112,6 +131,8 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	fs.StringVar(&cfg.videoID, "video-id", "", "YouTube video ID or URL")
 	fs.StringVar(&cfg.platform, "platform", "bilibili", "target platform (bilibili or tiktok)")
 	fs.StringVar(&cfg.outputDir, "output", "downloads", "output directory")
+	fs.StringVar(&cfg.dbPath, "db-path", "metadata.db", "path to sqlite metadata database")
+	fs.StringVar(&cfg.httpAddr, "http-addr", "", "HTTP listen address (enables controller server mode)")
 	fs.IntVar(&cfg.limit, "limit", 5, "max videos to download for channel")
 	fs.IntVar(&cfg.sleepSeconds, "sleep-seconds", 5, "sleep seconds between downloads")
 	fs.StringVar(&cfg.jsRuntime, "js-runtime", "auto", "JS runtime passed to yt-dlp (auto,node,deno,...)")
@@ -120,10 +141,10 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 		return cfg, err
 	}
 
-	if cfg.channelID == "" && cfg.videoID == "" {
+	if cfg.httpAddr == "" && cfg.channelID == "" && cfg.videoID == "" {
 		return cfg, errors.New("provide either --channel-id or --video-id")
 	}
-	if cfg.channelID != "" && cfg.videoID != "" {
+	if cfg.httpAddr == "" && cfg.channelID != "" && cfg.videoID != "" {
 		return cfg, errors.New("provide only one of --channel-id or --video-id")
 	}
 	if cfg.channelID != "" && cfg.limit <= 0 {
@@ -235,52 +256,6 @@ func videoURL(input string) string {
 
 func looksLikeURL(input string) bool {
 	return strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://")
-}
-
-func download(ctx context.Context, targetURL, outputDir string, limit int, sleep time.Duration, isChannel bool, jsRuntime, format string) ([]string, error) {
-	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
-	baseArgs := []string{
-		"--quiet",
-		"--no-warnings",
-		"--no-simulate",
-		"--remote-components", "ejs:github",
-		"--print", "after_move:filepath",
-		"-o", outputTemplate,
-	}
-	if jsRuntime != "" {
-		baseArgs = append(baseArgs, "--js-runtimes", jsRuntime)
-	}
-	if format != "" {
-		baseArgs = append(baseArgs, "--format", format)
-	}
-	if sleep > 0 {
-		baseArgs = append(baseArgs,
-			fmt.Sprintf("--sleep-interval=%d", int(sleep.Seconds())),
-			fmt.Sprintf("--max-sleep-interval=%d", int(sleep.Seconds())+1),
-		)
-	}
-	if isChannel {
-		baseArgs = append(baseArgs, "--playlist-items", fmt.Sprintf("1:%d", limit))
-	}
-
-	runWithExtras := func(extra []string) (ytDlpResult, error) {
-		args := make([]string, 0, len(baseArgs)+len(extra)+1)
-		args = append(args, baseArgs...)
-		args = append(args, extra...)
-		args = append(args, targetURL)
-		return runYtDlp(ctx, args)
-	}
-
-	res, err := runWithExtras(nil)
-	if shouldRetryWithDynamic(res.stderr, err) {
-		log.Println("yt-dlp indicated SABR fallback; retrying with --allow-dynamic-mpd --concurrent-fragments 1")
-		res, err = runWithExtras([]string{"--allow-dynamic-mpd", "--concurrent-fragments", "1"})
-	}
-	if err != nil {
-		return res.files, fmt.Errorf("yt-dlp failed: %w", err)
-	}
-
-	return res.files, nil
 }
 
 type ytDlpResult struct {
