@@ -5,6 +5,7 @@ go 1.22.0
 require modernc.org/sqlite v1.30.0
 
 require (
+	github.com/biliup/biliup v1.1.28 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect

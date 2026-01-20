@@ -33,6 +33,14 @@ type config struct {
 	sleepSeconds int
 	jsRuntime    string
 	format       string
+	biliupBinary string
+	biliupCookie string
+	biliupLine   string
+	biliupLimit  int
+	biliupTags   string
+	biliupTitle  string
+	biliupDesc   string
+	biliupDynamic string
 }
 
 type dummyUploader struct {
@@ -82,10 +90,13 @@ func main() {
 	}
 
 	downloader := app.NewYtDlpDownloader(time.Duration(cfg.sleepSeconds) * time.Second)
-	up := dummyUploader{platform: cfg.platform}
+	uploader, err := newUploaderFromConfig(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	controller := &app.Controller{
 		Downloader: downloader,
-		Uploader:   up,
+		Uploader:   uploader,
 		Store:      store,
 		OutputDir:  cfg.outputDir,
 		JSRuntime:  jsRuntime,
@@ -113,6 +124,39 @@ func main() {
 	}
 }
 
+func newUploaderFromConfig(cfg config) (app.Uploader, error) {
+	switch cfg.platform {
+	case "bilibili":
+		opts := app.BiliupUploaderOptions{
+			Binary:      cfg.biliupBinary,
+			CookiePath:  cfg.biliupCookie,
+			Line:        cfg.biliupLine,
+			Limit:       cfg.biliupLimit,
+			TitlePrefix: cfg.biliupTitle,
+			Description: cfg.biliupDesc,
+			Dynamic:     cfg.biliupDynamic,
+			Tags:        parseCSVList(cfg.biliupTags),
+		}
+		return app.NewBiliupUploader(opts), nil
+	case "tiktok":
+		return dummyUploader{platform: cfg.platform}, nil
+	default:
+		return nil, fmt.Errorf("unsupported platform: %s", cfg.platform)
+	}
+}
+
+func parseCSVList(input string) []string {
+	parts := strings.Split(input, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
 func parseFlags() (config, error) {
 	return parseFlagsFrom(flag.CommandLine, os.Args[1:])
 }
@@ -129,6 +173,14 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	fs.IntVar(&cfg.sleepSeconds, "sleep-seconds", 5, "sleep seconds between downloads")
 	fs.StringVar(&cfg.jsRuntime, "js-runtime", "auto", "JS runtime passed to yt-dlp (auto,node,deno,...)")
 	fs.StringVar(&cfg.format, "format", "auto", "yt-dlp format selector (auto prefers mp4 when available)")
+	fs.StringVar(&cfg.biliupBinary, "biliup-binary", "biliup", "path to biliup CLI binary")
+	fs.StringVar(&cfg.biliupCookie, "biliup-cookie", "cookies.json", "path to biliup cookies.json (created after `biliup login`)")
+	fs.StringVar(&cfg.biliupLine, "biliup-line", "", "optional biliup upload line override (ws/qn/bda2/...)")
+	fs.IntVar(&cfg.biliupLimit, "biliup-limit", 3, "per-file biliup upload concurrency limit")
+	fs.StringVar(&cfg.biliupTags, "biliup-tags", "", "comma-separated biliup tags")
+	fs.StringVar(&cfg.biliupTitle, "biliup-title-prefix", "", "prefix prepended to derived biliup video titles")
+	fs.StringVar(&cfg.biliupDesc, "biliup-desc", "Uploaded via yt-transfer", "description text template for biliup uploads")
+	fs.StringVar(&cfg.biliupDynamic, "biliup-dynamic", "", "dynamic/status text for biliup uploads (defaults to description)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
