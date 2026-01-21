@@ -1,4 +1,4 @@
 downloads/
 *.mod
 *.db
-cookies.json
+./cookies.json
