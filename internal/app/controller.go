@@ -72,6 +72,7 @@ func (c *Controller) syncVideoByID(ctx context.Context, videoID, channelID strin
 	}
 	if result != nil {
 		result.Downloaded += len(files)
+		log.Printf("Video of id %s is downloaded", videoID)
 	}
 
 	for _, path := range files {
@@ -80,6 +81,7 @@ func (c *Controller) syncVideoByID(ctx context.Context, videoID, channelID strin
 		}
 		if result != nil {
 			result.Uploaded++
+			log.Printf("Uploaded the file: &s", path)
 		}
 	}
 

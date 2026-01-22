@@ -88,6 +88,7 @@ func main() {
 	if err := store.EnsureSchema(ctx); err != nil {
 		log.Fatal(err)
 	}
+	log.Println("Initialized database")
 
 	downloader := app.NewYtDlpDownloader(time.Duration(cfg.sleepSeconds) * time.Second)
 	uploader, err := newUploaderFromConfig(cfg)
@@ -102,14 +103,17 @@ func main() {
 		JSRuntime:  jsRuntime,
 		Format:     format,
 	}
+	log.Println("Initialized controller")
 
 	if cfg.httpAddr != "" {
 		if err := app.ServeHTTP(cfg.httpAddr, controller); err != nil {
 			log.Fatal(err)
 		}
+		log.Println("Server is initialized")
 		return
 	}
 
+	log.Println("Handling downloading")
 	switch {
 	case cfg.channelID != "":
 		if _, err := controller.SyncChannel(ctx, cfg.channelID, cfg.limit); err != nil {

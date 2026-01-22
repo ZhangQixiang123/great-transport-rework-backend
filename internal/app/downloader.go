@@ -56,6 +56,7 @@ func (d *YtDlpDownloader) ListChannelVideoIDs(ctx context.Context, channelURL st
 	return ids, nil
 }
 
+// TODO: can return NA as path
 func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir string, jsRuntime, format string) ([]string, error) {
 	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
 	baseArgs := []string{
@@ -97,10 +98,17 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 		res, err = runWithExtras([]string{"--allow-dynamic-mpd", "--concurrent-fragments", "1"})
 	}
 	if err != nil {
-		return res.files, fmt.Errorf("yt-dlp failed: %w", err)
+		return filterDownloadedFiles(res.files), fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
-	return res.files, nil
+	files := filterDownloadedFiles(res.files)
+	if len(files) == 0 {
+		existing, lookupErr := resolveExistingFiles(ctx, videoURL, outputTemplate, jsRuntime, format)
+		if lookupErr == nil && len(existing) > 0 {
+			return existing, nil
+		}
+	}
+	return files, nil
 }
 
 func runYtDlpLines(ctx context.Context, args []string) ([]string, error) {
@@ -152,6 +160,52 @@ func runYtDlp(ctx context.Context, args []string) (ytDlpResult, error) {
 		return ytDlpResult{files: files, stderr: stderrBuf.String()}, err
 	}
 	return ytDlpResult{files: files, stderr: stderrBuf.String()}, nil
+}
+
+func resolveExistingFiles(ctx context.Context, videoURL, outputTemplate, jsRuntime, format string) ([]string, error) {
+	args := []string{
+		"--quiet",
+		"--no-warnings",
+		"--no-download",
+		"--print", "filename",
+		"--remote-components", "ejs:github",
+		"-o", outputTemplate,
+	}
+	if jsRuntime != "" {
+		args = append(args, "--js-runtimes", jsRuntime)
+	}
+	if format != "" {
+		args = append(args, "--format", format)
+	}
+	args = append(args, videoURL)
+
+	lines, err := runYtDlpLines(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "NA" {
+			continue
+		}
+		if _, statErr := os.Stat(line); statErr == nil {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+func filterDownloadedFiles(files []string) []string {
+	result := make([]string, 0, len(files))
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if file == "" || file == "NA" {
+			continue
+		}
+		result = append(result, file)
+	}
+	return result
 }
 
 func shouldRetryWithDynamic(stderr string, runErr error) bool {

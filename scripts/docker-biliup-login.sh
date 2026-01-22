@@ -12,4 +12,6 @@ docker run --rm -it \
   -v "$COOKIE_PATH:/app/cookies.json" \
   --entrypoint /bin/sh \
   "$IMAGE" \
-  -c 'python3 -m biliup --user-cookie /app/cookies.json login "$@"' sh "$@"
+  -c 'if command -v biliup >/dev/null 2>&1; then biliup --user-cookie /app/cookies.json login "$@"; \
+      elif python3 -c "import biliup" >/dev/null 2>&1; then python3 -m biliup --user-cookie /app/cookies.json login "$@"; \
+      else echo "biliup not found in image. Rebuild with: docker build -t '"$IMAGE"' ."; exit 1; fi' sh "$@"

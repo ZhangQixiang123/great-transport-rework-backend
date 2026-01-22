@@ -52,7 +52,7 @@ func (u *BiliupUploader) Upload(path string) error {
 
 	meta := u.buildMetadata(path)
 
-	args := []string{"upload", "--user-cookie", cookie, "--limit", strconv.Itoa(u.opts.Limit)}
+	args := []string{"--user-cookie", cookie, "upload", "--limit", strconv.Itoa(u.opts.Limit)}
 	if u.opts.Line != "" {
 		args = append(args, "--line", u.opts.Line)
 	}
@@ -67,6 +67,7 @@ func (u *BiliupUploader) Upload(path string) error {
 		args = append(args, "--tag", meta.Tag)
 	}
 	args = append(args, path)
+	log.Println("Uploading the video at path:" + path)
 
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = newPrefixedLogger("biliup")
