@@ -81,7 +81,7 @@ func (c *Controller) syncVideoByID(ctx context.Context, videoID, channelID strin
 		}
 		if result != nil {
 			result.Uploaded++
-			log.Printf("Uploaded the file: &s", path)
+			log.Printf("Uploaded the file: %s", path)
 		}
 	}
 

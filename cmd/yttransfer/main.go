@@ -41,6 +41,30 @@ type config struct {
 	biliupTitle  string
 	biliupDesc   string
 	biliupDynamic string
+
+	// Channel management
+	addChannel    string
+	removeChannel string
+	listChannels  bool
+
+	// Scanning
+	scan        bool
+	scanChannel string
+
+	// Candidates
+	listCandidates bool
+	candidateLimit int
+
+	// Rule management
+	listRules    bool
+	setRule      string
+	addRule      string
+	removeRule   string
+
+	// Filtering
+	filterCandidates bool
+	listFiltered     bool
+	listRejected     bool
 }
 
 type dummyUploader struct {
@@ -113,6 +137,70 @@ func main() {
 		return
 	}
 
+	// Handle discovery and management modes
+	switch {
+	case cfg.addChannel != "":
+		if err := addChannelCmd(ctx, store, downloader, cfg.addChannel, jsRuntime); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case cfg.removeChannel != "":
+		if err := store.DeactivateChannel(ctx, cfg.removeChannel); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Deactivated channel %s", cfg.removeChannel)
+		return
+	case cfg.listChannels:
+		listChannelsCmd(ctx, store)
+		return
+	case cfg.scan:
+		scanner := &app.Scanner{Store: store, Downloader: downloader, JSRuntime: jsRuntime}
+		if err := scanner.ScanAllActive(ctx, cfg.limit); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case cfg.scanChannel != "":
+		scanner := &app.Scanner{Store: store, Downloader: downloader, JSRuntime: jsRuntime}
+		count, err := scanner.ScanChannel(ctx, cfg.scanChannel, cfg.limit)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Discovered %d videos", count)
+		return
+	case cfg.listCandidates:
+		listCandidatesCmd(ctx, store, cfg.candidateLimit)
+		return
+	case cfg.listRules:
+		listRulesCmd(ctx, store)
+		return
+	case cfg.setRule != "":
+		if err := setRuleCmd(ctx, store, cfg.setRule); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case cfg.addRule != "":
+		if err := addRuleCmd(ctx, store, cfg.addRule); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case cfg.removeRule != "":
+		if err := store.DeleteRule(ctx, cfg.removeRule); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Removed rule: %s", cfg.removeRule)
+		return
+	case cfg.filterCandidates:
+		filterCandidatesCmd(ctx, store, cfg.limit)
+		return
+	case cfg.listFiltered:
+		listFilteredCmd(ctx, store, cfg.candidateLimit)
+		return
+	case cfg.listRejected:
+		listRejectedCmd(ctx, store, cfg.candidateLimit)
+		return
+	}
+
+	// Handle sync modes
 	log.Println("Handling downloading")
 	switch {
 	case cfg.channelID != "":
@@ -125,6 +213,249 @@ func main() {
 		}
 	default:
 		log.Fatal("no channel or video provided; use --http-addr for server mode")
+	}
+}
+
+func addChannelCmd(ctx context.Context, store *app.SQLiteStore, downloader app.Downloader, channelInput string, jsRuntime string) error {
+	channelURL := channelInput
+	if !strings.Contains(channelInput, "youtube.com") && !strings.Contains(channelInput, "youtu.be") {
+		// Assume it's a channel ID
+		channelURL = "https://www.youtube.com/channel/" + channelInput
+	}
+
+	// Try to get channel metadata by fetching one video
+	videos, err := downloader.GetChannelVideosMetadata(ctx, channelURL, 1, jsRuntime)
+	var channelID, channelName string
+	if err == nil && len(videos) > 0 {
+		channelID = videos[0].ChannelID
+		channelName = videos[0].ChannelTitle
+	} else {
+		// Fallback: extract channel ID from URL or use input
+		channelID = extractChannelID(channelInput)
+	}
+
+	ch := app.Channel{
+		ChannelID:          channelID,
+		Name:               channelName,
+		URL:                channelURL,
+		ScanFrequencyHours: 6,
+		IsActive:           true,
+	}
+
+	if err := store.AddChannel(ctx, ch); err != nil {
+		return err
+	}
+	log.Printf("Added channel: %s (%s)", channelName, channelID)
+	return nil
+}
+
+func extractChannelID(input string) string {
+	// Try to extract channel ID from URL
+	if strings.Contains(input, "/channel/") {
+		parts := strings.Split(input, "/channel/")
+		if len(parts) > 1 {
+			id := strings.Split(parts[1], "/")[0]
+			id = strings.Split(id, "?")[0]
+			return id
+		}
+	}
+	if strings.Contains(input, "/@") {
+		parts := strings.Split(input, "/@")
+		if len(parts) > 1 {
+			handle := strings.Split(parts[1], "/")[0]
+			handle = strings.Split(handle, "?")[0]
+			return "@" + handle
+		}
+	}
+	return input
+}
+
+func listChannelsCmd(ctx context.Context, store *app.SQLiteStore) {
+	channels, err := store.ListActiveChannels(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(channels) == 0 {
+		log.Println("No channels in watchlist")
+		return
+	}
+	fmt.Println("Watched channels:")
+	for _, ch := range channels {
+		lastScan := "never"
+		if ch.LastScannedAt != nil {
+			lastScan = ch.LastScannedAt.Format("2006-01-02 15:04")
+		}
+		fmt.Printf("  %s | %s | Last scanned: %s\n", ch.ChannelID, ch.Name, lastScan)
+	}
+}
+
+func listCandidatesCmd(ctx context.Context, store *app.SQLiteStore, limit int) {
+	candidates, err := store.ListPendingCandidates(ctx, limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(candidates) == 0 {
+		log.Println("No pending candidates")
+		return
+	}
+	fmt.Println("Video candidates (not yet uploaded):")
+	for _, c := range candidates {
+		published := "unknown"
+		if c.PublishedAt != nil {
+			published = c.PublishedAt.Format("2006-01-02")
+		}
+		fmt.Printf("  %s | %s | Views: %d | Published: %s\n", c.VideoID, truncate(c.Title, 40), c.ViewCount, published)
+	}
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func listRulesCmd(ctx context.Context, store *app.SQLiteStore) {
+	// Seed default rules if none exist
+	engine := app.NewRuleEngine(store)
+	if err := engine.SeedDefaultRules(ctx); err != nil {
+		log.Printf("Warning: failed to seed default rules: %v", err)
+	}
+
+	rules, err := store.ListAllRules(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(rules) == 0 {
+		log.Println("No filter rules configured")
+		return
+	}
+	fmt.Println("Filter rules:")
+	fmt.Println("  PRIORITY | NAME                  | TYPE      | FIELD           | VALUE                    | ACTIVE")
+	fmt.Println("  " + strings.Repeat("-", 95))
+	for _, r := range rules {
+		active := "yes"
+		if !r.IsActive {
+			active = "no"
+		}
+		value := r.Value
+		if len(value) > 24 {
+			value = value[:21] + "..."
+		}
+		fmt.Printf("  %8d | %-21s | %-9s | %-15s | %-24s | %s\n",
+			r.Priority, truncate(r.RuleName, 21), r.RuleType, r.Field, value, active)
+	}
+}
+
+func setRuleCmd(ctx context.Context, store *app.SQLiteStore, setRule string) error {
+	parts := strings.SplitN(setRule, "=", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid format; use name=value")
+	}
+	ruleName := strings.TrimSpace(parts[0])
+	ruleValue := strings.TrimSpace(parts[1])
+
+	// Check if rule exists
+	existing, err := store.GetRule(ctx, ruleName)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("rule %q not found; use --add-rule to create new rules", ruleName)
+	}
+
+	if err := store.UpdateRule(ctx, ruleName, ruleValue); err != nil {
+		return err
+	}
+	log.Printf("Updated rule %s: %s -> %s", ruleName, existing.Value, ruleValue)
+	return nil
+}
+
+func addRuleCmd(ctx context.Context, store *app.SQLiteStore, jsonStr string) error {
+	rule, err := app.ParseRuleFromJSON(jsonStr)
+	if err != nil {
+		return fmt.Errorf("invalid rule JSON: %w", err)
+	}
+
+	if err := store.AddRule(ctx, *rule); err != nil {
+		return err
+	}
+	log.Printf("Added rule: %s (type=%s, field=%s, value=%s)", rule.RuleName, rule.RuleType, rule.Field, rule.Value)
+	return nil
+}
+
+func filterCandidatesCmd(ctx context.Context, store *app.SQLiteStore, limit int) {
+	engine := app.NewRuleEngine(store)
+
+	// Seed default rules if none exist
+	if err := engine.SeedDefaultRules(ctx); err != nil {
+		log.Printf("Warning: failed to seed default rules: %v", err)
+	}
+
+	passed, rejected, err := engine.FilterPendingCandidates(ctx, limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(passed) == 0 && len(rejected) == 0 {
+		log.Println("No pending candidates to filter")
+		return
+	}
+
+	log.Printf("Filtered %d candidates: %d passed, %d rejected", len(passed)+len(rejected), len(passed), len(rejected))
+
+	if len(passed) > 0 {
+		fmt.Println("\nPassed:")
+		for _, c := range passed {
+			fmt.Printf("  %s | %s | Views: %d\n", c.VideoID, truncate(c.Title, 40), c.ViewCount)
+		}
+	}
+
+	if len(rejected) > 0 {
+		fmt.Println("\nRejected:")
+		for _, c := range rejected {
+			decision, _ := store.GetRuleDecision(ctx, c.VideoID)
+			reason := "unknown"
+			if decision != nil {
+				reason = decision.RejectReason
+			}
+			fmt.Printf("  %s | %s | Reason: %s\n", c.VideoID, truncate(c.Title, 30), reason)
+		}
+	}
+}
+
+func listFilteredCmd(ctx context.Context, store *app.SQLiteStore, limit int) {
+	candidates, err := store.ListFilteredCandidates(ctx, limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(candidates) == 0 {
+		log.Println("No candidates have passed filtering yet")
+		return
+	}
+	fmt.Println("Candidates that passed filtering:")
+	for _, c := range candidates {
+		published := "unknown"
+		if c.PublishedAt != nil {
+			published = c.PublishedAt.Format("2006-01-02")
+		}
+		fmt.Printf("  %s | %s | Views: %d | Published: %s\n", c.VideoID, truncate(c.Title, 40), c.ViewCount, published)
+	}
+}
+
+func listRejectedCmd(ctx context.Context, store *app.SQLiteStore, limit int) {
+	rejected, err := store.ListRejectedCandidates(ctx, limit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(rejected) == 0 {
+		log.Println("No candidates have been rejected yet")
+		return
+	}
+	fmt.Println("Rejected candidates:")
+	for _, r := range rejected {
+		fmt.Printf("  %s | %s | Rejected by: %s | Reason: %s\n",
+			r.VideoID, truncate(r.Title, 30), r.RejectRuleName, r.RejectReason)
 	}
 }
 
@@ -185,11 +516,42 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	fs.StringVar(&cfg.biliupTitle, "biliup-title-prefix", "", "prefix prepended to derived biliup video titles")
 	fs.StringVar(&cfg.biliupDesc, "biliup-desc", "Uploaded via yt-transfer", "description text template for biliup uploads")
 	fs.StringVar(&cfg.biliupDynamic, "biliup-dynamic", "", "dynamic/status text for biliup uploads (defaults to description)")
+
+	// Channel management flags
+	fs.StringVar(&cfg.addChannel, "add-channel", "", "Add a channel to watchlist (URL or ID)")
+	fs.StringVar(&cfg.removeChannel, "remove-channel", "", "Remove a channel from watchlist")
+	fs.BoolVar(&cfg.listChannels, "list-channels", false, "List all watched channels")
+
+	// Scanning flags
+	fs.BoolVar(&cfg.scan, "scan", false, "Scan watched channels for new videos")
+	fs.StringVar(&cfg.scanChannel, "scan-channel", "", "Scan a specific channel")
+
+	// Candidate flags
+	fs.BoolVar(&cfg.listCandidates, "list-candidates", false, "List discovered video candidates")
+	fs.IntVar(&cfg.candidateLimit, "candidate-limit", 20, "Limit for candidate listing")
+
+	// Rule management flags
+	fs.BoolVar(&cfg.listRules, "list-rules", false, "List all filter rules")
+	fs.StringVar(&cfg.setRule, "set-rule", "", "Set/update a rule value (name=value)")
+	fs.StringVar(&cfg.addRule, "add-rule", "", "Add a filter rule (JSON format)")
+	fs.StringVar(&cfg.removeRule, "remove-rule", "", "Remove a filter rule by name")
+
+	// Filtering flags
+	fs.BoolVar(&cfg.filterCandidates, "filter", false, "Run rule filter on pending candidates")
+	fs.BoolVar(&cfg.listFiltered, "list-filtered", false, "List candidates that passed filtering")
+	fs.BoolVar(&cfg.listRejected, "list-rejected", false, "List candidates rejected by rules")
+
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
 
-	if cfg.httpAddr == "" && cfg.channelID == "" && cfg.videoID == "" {
+	// Determine if any discovery mode is active
+	discoveryMode := cfg.addChannel != "" || cfg.removeChannel != "" || cfg.listChannels ||
+		cfg.scan || cfg.scanChannel != "" || cfg.listCandidates ||
+		cfg.listRules || cfg.setRule != "" || cfg.addRule != "" || cfg.removeRule != "" ||
+		cfg.filterCandidates || cfg.listFiltered || cfg.listRejected
+
+	if cfg.httpAddr == "" && cfg.channelID == "" && cfg.videoID == "" && !discoveryMode {
 		return cfg, errors.New("provide either --channel-id or --video-id")
 	}
 	if cfg.httpAddr == "" && cfg.channelID != "" && cfg.videoID != "" {
