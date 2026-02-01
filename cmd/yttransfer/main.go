@@ -65,6 +65,14 @@ type config struct {
 	filterCandidates bool
 	listFiltered     bool
 	listRejected     bool
+
+	// Performance tracking (Phase 3A)
+	trackPerformance bool
+	showStats        bool
+
+	// Competitor monitoring (Phase 3B)
+	competitorStats     bool
+	trainingDataStatus  bool
 }
 
 type dummyUploader struct {
@@ -197,6 +205,20 @@ func main() {
 		return
 	case cfg.listRejected:
 		listRejectedCmd(ctx, store, cfg.candidateLimit)
+		return
+	case cfg.trackPerformance:
+		if err := trackPerformanceCmd(ctx, store, cfg.dbPath); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case cfg.showStats:
+		showStatsCmd(ctx, store)
+		return
+	case cfg.competitorStats:
+		showCompetitorStatsCmd(ctx, store)
+		return
+	case cfg.trainingDataStatus:
+		showTrainingDataStatusCmd(ctx, store)
 		return
 	}
 
@@ -459,6 +481,190 @@ func listRejectedCmd(ctx context.Context, store *app.SQLiteStore, limit int) {
 	}
 }
 
+// trackPerformanceCmd invokes the Python Bilibili tracker to collect metrics.
+func trackPerformanceCmd(ctx context.Context, store *app.SQLiteStore, dbPath string) error {
+	// First, check if we have any uploads with bvid
+	uploads, err := store.GetAllUploadsWithBvid(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get uploads: %w", err)
+	}
+	if len(uploads) == 0 {
+		log.Println("No uploads with Bilibili bvid found. Upload videos first with the new uploader.")
+		return nil
+	}
+
+	log.Printf("Found %d uploads with Bilibili bvid", len(uploads))
+
+	// Try to run the Python tracker
+	pythonPaths := []string{"python3", "python"}
+	var pythonBinary string
+	for _, p := range pythonPaths {
+		if app.HasExecutable(p) {
+			pythonBinary = p
+			break
+		}
+	}
+	if pythonBinary == "" {
+		return fmt.Errorf("Python not found; install Python 3 to use --track-performance")
+	}
+
+	// Path to Python CLI
+	trackerScript := "ml-service/app/cli.py"
+	if _, err := os.Stat(trackerScript); os.IsNotExist(err) {
+		return fmt.Errorf("tracker script not found at %s; ensure ml-service is set up", trackerScript)
+	}
+
+	// Run the tracker
+	cmd := exec.CommandContext(ctx, pythonBinary, "-m", "app.cli", "track", "--db-path", dbPath)
+	cmd.Dir = "ml-service"
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	log.Println("Running Bilibili performance tracker...")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tracker failed: %w", err)
+	}
+
+	// Also run labeling
+	cmd = exec.CommandContext(ctx, pythonBinary, "-m", "app.cli", "label", "--db-path", dbPath)
+	cmd.Dir = "ml-service"
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	log.Println("Running auto-labeling...")
+	if err := cmd.Run(); err != nil {
+		log.Printf("Warning: labeling failed: %v", err)
+	}
+
+	return nil
+}
+
+// showStatsCmd displays upload statistics.
+func showStatsCmd(ctx context.Context, store *app.SQLiteStore) {
+	stats, err := store.GetUploadStats(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get stats: %v", err)
+	}
+
+	fmt.Println("\n========================================")
+	fmt.Println("         Upload Statistics")
+	fmt.Println("========================================")
+	fmt.Printf("Total uploads:           %d\n", stats.TotalUploads)
+	fmt.Printf("Uploads with Bilibili ID: %d\n", stats.UploadsWithBvid)
+	fmt.Printf("Uploads with performance data: %d\n", stats.UploadsWithPerformance)
+	fmt.Println()
+
+	if len(stats.UploadsByLabel) > 0 {
+		fmt.Println("By Label:")
+		for label, count := range stats.UploadsByLabel {
+			fmt.Printf("  %-12s: %d\n", label, count)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("Average Metrics (from latest checkpoint):")
+	fmt.Printf("  Views:           %.0f\n", stats.AvgViews)
+	fmt.Printf("  Likes:           %.0f\n", stats.AvgLikes)
+	fmt.Printf("  Coins:           %.0f\n", stats.AvgCoins)
+	fmt.Printf("  Engagement Rate: %.2f%%\n", stats.AvgEngagementRate*100)
+	fmt.Println("========================================")
+
+	// List recent uploads with performance
+	recent, err := store.ListRecentUploadsWithPerformance(ctx, 10)
+	if err != nil {
+		log.Printf("Warning: failed to get recent uploads: %v", err)
+		return
+	}
+
+	if len(recent) > 0 {
+		fmt.Println("Recent Uploads with Performance:")
+		fmt.Println("  VIDEO_ID        | BVID           | VIEWS    | LIKES | COINS | ENGAGEMENT | LABEL")
+		fmt.Println("  " + strings.Repeat("-", 85))
+		for _, u := range recent {
+			label := u.Label
+			if label == "" {
+				label = "-"
+			}
+			fmt.Printf("  %-16s | %-14s | %8d | %5d | %5d | %9.2f%% | %s\n",
+				truncate(u.VideoID, 16), truncate(u.BilibiliBvid, 14),
+				u.Views, u.Likes, u.Coins, u.EngagementRate*100, label)
+		}
+		fmt.Println()
+	}
+}
+
+// showCompetitorStatsCmd displays competitor channel statistics.
+func showCompetitorStatsCmd(ctx context.Context, store *app.SQLiteStore) {
+	stats, err := store.GetCompetitorStats(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get competitor stats: %v", err)
+	}
+
+	fmt.Println("\n========================================")
+	fmt.Println("     Competitor Channel Statistics")
+	fmt.Println("========================================")
+	fmt.Printf("Total channels:    %d\n", stats.TotalChannels)
+	fmt.Printf("Active channels:   %d\n", stats.ActiveChannels)
+	fmt.Printf("Total videos:      %d\n", stats.TotalVideos)
+	fmt.Printf("Labeled videos:    %d\n", stats.LabeledVideos)
+	fmt.Printf("Unlabeled videos:  %d\n", stats.UnlabeledVideos)
+	fmt.Println("========================================")
+
+	// List channels
+	channels, err := store.ListCompetitorChannels(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to list channels: %v", err)
+		return
+	}
+
+	if len(channels) > 0 {
+		fmt.Println("\nActive Competitor Channels:")
+		fmt.Println("  UID          | NAME                     | FOLLOWERS  | VIDEOS")
+		fmt.Println("  " + strings.Repeat("-", 65))
+		for _, ch := range channels {
+			fmt.Printf("  %-12s | %-24s | %10d | %6d\n",
+				truncate(ch.BilibiliUID, 12), truncate(ch.Name, 24),
+				ch.FollowerCount, ch.VideoCount)
+		}
+		fmt.Println()
+	}
+}
+
+// showTrainingDataStatusCmd displays training data counts by label.
+func showTrainingDataStatusCmd(ctx context.Context, store *app.SQLiteStore) {
+	summary, err := store.GetTrainingDataSummary(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get training data summary: %v", err)
+	}
+
+	fmt.Println("\n========================================")
+	fmt.Println("       Training Data Summary")
+	fmt.Println("========================================")
+	fmt.Printf("Total videos:      %d\n", summary.Total)
+	fmt.Println()
+	fmt.Println("By Label:")
+	fmt.Printf("  viral:      %d\n", summary.Viral)
+	fmt.Printf("  successful: %d\n", summary.Successful)
+	fmt.Printf("  standard:   %d\n", summary.Standard)
+	fmt.Printf("  failed:     %d\n", summary.Failed)
+	fmt.Printf("  unlabeled:  %d\n", summary.Unlabeled)
+	fmt.Println("========================================")
+
+	// Show percentage breakdown if we have data
+	if summary.Total > 0 {
+		labeled := summary.Total - summary.Unlabeled
+		fmt.Printf("\nLabeled: %d (%.1f%%)\n", labeled, float64(labeled)/float64(summary.Total)*100)
+		if labeled > 0 {
+			fmt.Println("\nLabel Distribution (of labeled):")
+			fmt.Printf("  viral:      %.1f%%\n", float64(summary.Viral)/float64(labeled)*100)
+			fmt.Printf("  successful: %.1f%%\n", float64(summary.Successful)/float64(labeled)*100)
+			fmt.Printf("  standard:   %.1f%%\n", float64(summary.Standard)/float64(labeled)*100)
+			fmt.Printf("  failed:     %.1f%%\n", float64(summary.Failed)/float64(labeled)*100)
+		}
+		fmt.Println()
+	}
+}
+
 func newUploaderFromConfig(cfg config) (app.Uploader, error) {
 	switch cfg.platform {
 	case "bilibili":
@@ -541,6 +747,14 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	fs.BoolVar(&cfg.listFiltered, "list-filtered", false, "List candidates that passed filtering")
 	fs.BoolVar(&cfg.listRejected, "list-rejected", false, "List candidates rejected by rules")
 
+	// Performance tracking flags (Phase 3A)
+	fs.BoolVar(&cfg.trackPerformance, "track-performance", false, "Collect Bilibili performance metrics for uploaded videos")
+	fs.BoolVar(&cfg.showStats, "stats", false, "Show upload statistics summary")
+
+	// Competitor monitoring flags (Phase 3B)
+	fs.BoolVar(&cfg.competitorStats, "competitor-stats", false, "Show competitor channel statistics")
+	fs.BoolVar(&cfg.trainingDataStatus, "training-data-status", false, "Show training data counts by label")
+
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -549,7 +763,9 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	discoveryMode := cfg.addChannel != "" || cfg.removeChannel != "" || cfg.listChannels ||
 		cfg.scan || cfg.scanChannel != "" || cfg.listCandidates ||
 		cfg.listRules || cfg.setRule != "" || cfg.addRule != "" || cfg.removeRule != "" ||
-		cfg.filterCandidates || cfg.listFiltered || cfg.listRejected
+		cfg.filterCandidates || cfg.listFiltered || cfg.listRejected ||
+		cfg.trackPerformance || cfg.showStats ||
+		cfg.competitorStats || cfg.trainingDataStatus
 
 	if cfg.httpAddr == "" && cfg.channelID == "" && cfg.videoID == "" && !discoveryMode {
 		return cfg, errors.New("provide either --channel-id or --video-id")

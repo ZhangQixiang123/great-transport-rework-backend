@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -33,13 +35,26 @@ func NewBiliupUploader(opts BiliupUploaderOptions) *BiliupUploader {
 	return &BiliupUploader{opts: opts}
 }
 
+// UploadResult contains the result of a successful upload.
+type UploadResult struct {
+	BilibiliBvid string // Bilibili video ID (e.g., BV1xx411x7xx)
+}
+
+// Upload uploads a video to Bilibili and returns the result including bvid.
+// This method is kept for backward compatibility.
 func (u *BiliupUploader) Upload(path string) error {
+	_, err := u.UploadWithResult(path)
+	return err
+}
+
+// UploadWithResult uploads a video and returns the upload result including bvid.
+func (u *BiliupUploader) UploadWithResult(path string) (*UploadResult, error) {
 	binary := u.opts.Binary
 	if binary == "" {
 		binary = "biliup"
 	}
 	if _, err := LookPath(binary); err != nil {
-		return fmt.Errorf("biliup binary %q not found in PATH; install it from github.com/biliup/biliup or set --biliup-binary", binary)
+		return nil, fmt.Errorf("biliup binary %q not found in PATH; install it from github.com/biliup/biliup or set --biliup-binary", binary)
 	}
 
 	cookie := u.opts.CookiePath
@@ -47,7 +62,7 @@ func (u *BiliupUploader) Upload(path string) error {
 		cookie = "cookies.json"
 	}
 	if err := ensureCookieExists(cookie); err != nil {
-		return err
+		return nil, err
 	}
 
 	meta := u.buildMetadata(path)
@@ -70,12 +85,54 @@ func (u *BiliupUploader) Upload(path string) error {
 	log.Println("Uploading the video at path:" + path)
 
 	cmd := exec.Command(binary, args...)
-	cmd.Stdout = newPrefixedLogger("biliup")
-	cmd.Stderr = newPrefixedLogger("biliup")
+
+	// Capture stdout to parse bvid
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutWriter := io.MultiWriter(&stdoutBuf, newPrefixedLogger("biliup"))
+	stderrWriter := io.MultiWriter(&stderrBuf, newPrefixedLogger("biliup"))
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("biliup upload failed: %w", err)
+		return nil, fmt.Errorf("biliup upload failed: %w", err)
 	}
-	return nil
+
+	// Parse bvid from output
+	result := &UploadResult{}
+	output := stdoutBuf.String() + stderrBuf.String()
+	result.BilibiliBvid = parseBvidFromOutput(output)
+
+	if result.BilibiliBvid != "" {
+		log.Printf("Upload successful, Bilibili bvid: %s", result.BilibiliBvid)
+	} else {
+		log.Println("Upload successful, but could not parse bvid from output")
+	}
+
+	return result, nil
+}
+
+// parseBvidFromOutput extracts the Bilibili video ID from biliup output.
+// biliup typically outputs lines like: "bvid: BV1xx411x7xx" or contains the bvid in the response.
+func parseBvidFromOutput(output string) string {
+	// Pattern 1: Direct bvid output (e.g., "bvid: BV1xx411x7xx" or "bvid=BV1xx411x7xx")
+	bvidPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`[Bb][Vv][Ii][Dd][:\s=]+([Bb][Vv][0-9a-zA-Z]+)`),
+		regexp.MustCompile(`"bvid"\s*:\s*"([Bb][Vv][0-9a-zA-Z]+)"`),
+		regexp.MustCompile(`'bvid'\s*:\s*'([Bb][Vv][0-9a-zA-Z]+)'`),
+		// Pattern for URL containing bvid
+		regexp.MustCompile(`bilibili\.com/video/([Bb][Vv][0-9a-zA-Z]+)`),
+		// Standalone BV pattern (less reliable, used as fallback)
+		regexp.MustCompile(`\b([Bb][Vv]1[0-9a-zA-Z]{9})\b`),
+	}
+
+	for _, pattern := range bvidPatterns {
+		matches := pattern.FindStringSubmatch(output)
+		if len(matches) >= 2 {
+			return matches[1]
+		}
+	}
+
+	return ""
 }
 
 func ensureCookieExists(path string) error {
