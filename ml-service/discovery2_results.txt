@@ -1,0 +1,133 @@
+======================================================================
+Discovering channels with high YouTube ID reference rates
+======================================================================
+
+Searching by YouTube creator names...
+  Searching: 'pewdiepie 搬运'... 39 results
+  Searching: 'MrBeast 搬运'... 21 results
+  Searching: 'Mark Rober 搬运'... 42 results
+  Searching: 'Dude Perfect 搬运'... 42 results
+  Searching: 'Kurzgesagt 搬运'... 41 results
+  Searching: 'Veritasium 搬运'... 22 results
+  Searching: 'Tom Scott 搬运'... 42 results
+  Searching: 'SmarterEveryDay 搬运'... 41 results
+  Searching: 'Corridor Crew 搬运'... 42 results
+  Searching: 'JCS Criminal Psychology 搬运'... 42 results
+  Searching: 'Vsauce 搬运'... 42 results
+  Searching: 'Numberphile 搬运'... 37 results
+  Searching: 'CGP Grey 搬运'... 42 results
+  Searching: 'Lemmino 搬运'... 42 results
+  Searching: 'Wired 搬运'... 41 results
+  Searching: 'Vox 搬运'... 42 results
+  Searching: 'Johnny Harris 搬运'... 42 results
+  Searching: 'Real Engineering 搬运'... 42 results
+  Searching: 'Wendover Productions 搬运'... 42 results
+  Searching: 'Half as Interesting 搬运'... 42 results
+  Searching: 'NileRed 搬运'... 42 results
+  Searching: 'StuffMadeHere 搬运'... 42 results
+  Searching: 'Michael Reeves 搬运'... 42 results
+  Searching: 'William Osman 搬运'... 42 results
+  Searching: 'penguinz0 搬运'... 42 results
+  Searching: 'Daily Dose Of Internet 搬运'... 42 results
+  Searching: 'Binging with Babish 搬运'... 42 results
+  Searching: 'Gordon Ramsay 搬运'... 42 results
+  Searching: 'Jacksepticeye 搬运'... 42 results
+  Searching: 'Markiplier 搬运'... 42 results
+
+Searching by pattern keywords...
+  Searching: 'youtube.com/watch'... 84 results
+  Searching: 'youtu.be'... 82 results
+  Searching: '[搬运] youtube'... 79 results
+  Searching: '原链接 youtube'... 84 results
+  Searching: 'source youtube'... 82 results
+
+Found 897 candidate channels
+
+Checking YouTube ID rates for top 30 candidates...
+  GOOD: 黑纹白斑马 (1263732318) - 14656 videos, 100% YT ID rate (30/30)
+  GOOD: wdygggh (121473911) - 32523 videos, 100% YT ID rate (30/30)
+  GOOD: 英文白斑马 (6756999) - 3299 videos, 100% YT ID rate (30/30)
+  NONE: AI译片君 (56628194) - 20031 videos, 0% YT ID rate
+  GOOD: 香蕉配音君 (3546839982803255) - 6457 videos, 100% YT ID rate (30/30)
+  GOOD: 观察员阿星 (475981121) - 508 videos, 100% YT ID rate (30/30)
+  GOOD: 拍不出来的猎户 (15935893) - 64 videos, 47% YT ID rate (14/30)
+  GOOD: 我家的脑洞君 (3773620) - 799 videos, 93% YT ID rate (28/30)
+  GOOD: 圆桌字幕组 (23534705) - 464 videos, 90% YT ID rate (27/30)
+  GOOD: 洝博不在这里 (66795887) - 2002 videos, 100% YT ID rate (30/30)
+  GOOD: 我这么帅好烦恼啊 (9494491) - 33 videos, 43% YT ID rate (13/30)
+  NONE: 喜欢喵喵叫的小猫咪 (23279213) - 1239 videos, 0% YT ID rate
+  NONE: dzpl (40031484) - 708 videos, 0% YT ID rate
+  GOOD: 白鲸生活组 (520908683) - 231 videos, 100% YT ID rate (30/30)
+  LOW:  一摩尔炸鸡翅 (34842921) - 3983 videos, 17% YT ID rate (5/30)
+  GOOD: 爱摸鱼的月萌 (153950464) - 18474 videos, 50% YT ID rate (15/30)
+  GOOD: -LilyPichu- (3457624) - 939 videos, 73% YT ID rate (22/30)
+  LOW:  jackzhaosz (15389242) - 11 videos, 91% YT ID rate (10/11)
+  GOOD: vector090_ (401400666) - 1487 videos, 100% YT ID rate (30/30)
+  GOOD: 嘟噜噗噜 (33708661) - 502 videos, 100% YT ID rate (30/30)
+  GOOD: 夏林嘶丢丢 (65410812) - 2005 videos, 93% YT ID rate (28/30)
+  GOOD: 利是包 (6856883) - 739 videos, 100% YT ID rate (30/30)
+  GOOD: 不进球的冰神柱 (40291327) - 30088 videos, 67% YT ID rate (20/30)
+  GOOD: Kurzgesagt-科普 (3461582812088629) - 103 videos, 93% YT ID rate (28/30)
+  GOOD: 青知字幕组 (21416270) - 560 videos, 97% YT ID rate (29/30)
+  LOW:  Delopelos (3546573805980210) - 7 videos, 100% YT ID rate (7/7)
+  NONE: 苍生孤 (4799711) - 706 videos, 0% YT ID rate
+  GOOD: 末吉in_wonderland (13170390) - 269 videos, 100% YT ID rate (30/30)
+  GOOD: 优质型NPC (10523655) - 103 videos, 87% YT ID rate (26/30)
+  GOOD: Barnett-Wong (816198) - 223 videos, 97% YT ID rate (29/30)
+
+======================================================================
+CHANNELS WITH HIGH YOUTUBE ID RATES (>30%)
+======================================================================
+Name                           UID                  Videos   YT Rate    Est. w/ YT ID  
+-----------------------------------------------------------------------------------
+  wdygggh                      121473911            32523    100%       ~32523
+  不进球的冰神柱                      40291327             30088    67%        ~20058
+  黑纹白斑马                        1263732318           14656    100%       ~14656
+  爱摸鱼的月萌                       153950464            18474    50%        ~9237
+  香蕉配音君                        3546839982803255     6457     100%       ~6457
+  英文白斑马                        6756999              3299     100%       ~3299
+  洝博不在这里                       66795887             2002     100%       ~2002
+  夏林嘶丢丢                        65410812             2005     93%        ~1871
+  vector090_                   401400666            1487     100%       ~1487
+  我家的脑洞君                       3773620              799      93%        ~745
+  利是包                          6856883              739      100%       ~739
+  -LilyPichu-                  3457624              939      73%        ~688
+  青知字幕组                        21416270             560      97%        ~541
+  观察员阿星                        475981121            508      100%       ~508
+  嘟噜噗噜                         33708661             502      100%       ~502
+  圆桌字幕组                        23534705             464      90%        ~417
+  末吉in_wonderland              13170390             269      100%       ~269
+  白鲸生活组                        520908683            231      100%       ~231
+  Barnett-Wong                 816198               223      97%        ~215
+  Kurzgesagt-科普                3461582812088629     103      93%        ~96
+  优质型NPC                       10523655             103      87%        ~89
+  拍不出来的猎户                      15935893             64       47%        ~29
+  我这么帅好烦恼啊                     9494491              33       43%        ~14
+
+Total new channels: 23
+Estimated videos with YouTube IDs: ~96673
+
+UIDs to add:
+  "121473911",  # wdygggh (32523 videos, 100% YT rate)
+  "40291327",  # 不进球的冰神柱 (30088 videos, 67% YT rate)
+  "1263732318",  # 黑纹白斑马 (14656 videos, 100% YT rate)
+  "153950464",  # 爱摸鱼的月萌 (18474 videos, 50% YT rate)
+  "3546839982803255",  # 香蕉配音君 (6457 videos, 100% YT rate)
+  "6756999",  # 英文白斑马 (3299 videos, 100% YT rate)
+  "66795887",  # 洝博不在这里 (2002 videos, 100% YT rate)
+  "65410812",  # 夏林嘶丢丢 (2005 videos, 93% YT rate)
+  "401400666",  # vector090_ (1487 videos, 100% YT rate)
+  "3773620",  # 我家的脑洞君 (799 videos, 93% YT rate)
+  "6856883",  # 利是包 (739 videos, 100% YT rate)
+  "3457624",  # -LilyPichu- (939 videos, 73% YT rate)
+  "21416270",  # 青知字幕组 (560 videos, 97% YT rate)
+  "475981121",  # 观察员阿星 (508 videos, 100% YT rate)
+  "33708661",  # 嘟噜噗噜 (502 videos, 100% YT rate)
+  "23534705",  # 圆桌字幕组 (464 videos, 90% YT rate)
+  "13170390",  # 末吉in_wonderland (269 videos, 100% YT rate)
+  "520908683",  # 白鲸生活组 (231 videos, 100% YT rate)
+  "816198",  # Barnett-Wong (223 videos, 97% YT rate)
+  "3461582812088629",  # Kurzgesagt-科普 (103 videos, 93% YT rate)
+  "10523655",  # 优质型NPC (103 videos, 87% YT rate)
+  "15935893",  # 拍不出来的猎户 (64 videos, 47% YT rate)
+  "9494491",  # 我这么帅好烦恼啊 (33 videos, 43% YT rate)
