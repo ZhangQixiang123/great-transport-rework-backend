@@ -11,6 +11,7 @@ Usage:
     python -m app.cli collect-competitor --db-path /path/to/db.sqlite UID
     python -m app.cli collect-all-competitors --db-path /path/to/db.sqlite
     python -m app.cli label-videos --db-path /path/to/db.sqlite
+    python -m app.cli train --db-path /path/to/db.sqlite [--gpu] [--num-rounds 500]
 """
 import argparse
 import asyncio
@@ -146,6 +147,52 @@ def parse_args():
     training_status_parser = subparsers.add_parser(
         "training-status",
         help="Show training data summary by label"
+    )
+
+    # Train model command
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Train LightGBM scoring model on labeled competitor videos"
+    )
+    train_parser.add_argument(
+        "--model-dir",
+        default="models",
+        help="Directory to save model artifacts (default: models)"
+    )
+    train_parser.add_argument(
+        "--test-size",
+        type=float,
+        default=0.2,
+        help="Fraction of data for test set (default: 0.2)"
+    )
+    train_parser.add_argument(
+        "--num-rounds",
+        type=int,
+        default=500,
+        help="Max boosting rounds (default: 500)"
+    )
+    train_parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help="Learning rate (default: 0.05)"
+    )
+    train_parser.add_argument(
+        "--min-samples",
+        type=int,
+        default=50,
+        help="Minimum required labeled samples (default: 50)"
+    )
+    train_parser.add_argument(
+        "--gpu",
+        action="store_true",
+        default=None,
+        help="Force GPU training"
+    )
+    train_parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Force CPU training"
     )
 
     return parser.parse_args()
@@ -301,6 +348,56 @@ def cmd_training_status(db: Database, args) -> dict:
     }
 
 
+def cmd_train(db: Database, args) -> dict:
+    """Execute the train command (sync — CPU/GPU bound)."""
+    # Lazy imports to avoid loading ML deps for other commands
+    from .training.trainer import train_model
+
+    db.ensure_competitor_tables()
+
+    # Resolve GPU flag
+    use_gpu = None
+    if args.gpu:
+        use_gpu = True
+    elif args.no_gpu:
+        use_gpu = False
+
+    model, report, validation = train_model(
+        db,
+        model_dir=args.model_dir,
+        test_size=args.test_size,
+        num_rounds=args.num_rounds,
+        learning_rate=args.learning_rate,
+        min_samples=args.min_samples,
+        use_gpu=use_gpu,
+    )
+
+    result = {
+        "command": "train",
+        "validation": {
+            "is_valid": validation.is_valid,
+            "total_samples": validation.total_samples,
+            "class_distribution": validation.class_distribution,
+            "warnings": validation.warnings,
+            "errors": validation.errors,
+        },
+    }
+
+    if model and report:
+        result["success"] = True
+        result["evaluation"] = {
+            "accuracy": round(report.accuracy, 4),
+            "weighted_f1": round(report.weighted_f1, 4),
+            "macro_f1": round(report.macro_f1, 4),
+            "logloss": round(report.logloss, 4),
+        }
+        result["model_dir"] = args.model_dir
+    else:
+        result["success"] = False
+
+    return result
+
+
 def cmd_stats(db: Database, args) -> dict:
     """Execute the stats command."""
     # Get basic counts
@@ -380,6 +477,8 @@ async def main():
             result = cmd_label_videos(db, args)
         elif args.command == "training-status":
             result = cmd_training_status(db, args)
+        elif args.command == "train":
+            result = cmd_train(db, args)
         else:
             logger.error(f"Unknown command: {args.command}")
             sys.exit(1)
@@ -470,6 +569,29 @@ async def main():
             print(f"  standard: {result.get('standard', 0)}")
             print(f"  failed: {result.get('failed', 0)}")
             print(f"  unlabeled: {result.get('unlabeled', 0)}")
+
+        elif args.command == "train":
+            v = result["validation"]
+            print(f"Data: {v['total_samples']} labeled samples")
+            if v["class_distribution"]:
+                for name, count in sorted(v["class_distribution"].items()):
+                    print(f"  {name}: {count}")
+            if v["errors"]:
+                print(f"\nTraining FAILED — data requirements not met:")
+                for e in v["errors"]:
+                    print(f"  - {e}")
+            if v["warnings"]:
+                print(f"\nWarnings:")
+                for w in v["warnings"]:
+                    print(f"  - {w}")
+            if result.get("success"):
+                ev = result["evaluation"]
+                print(f"\nModel trained successfully!")
+                print(f"  Accuracy:    {ev['accuracy']}")
+                print(f"  Weighted F1: {ev['weighted_f1']}")
+                print(f"  Macro F1:    {ev['macro_f1']}")
+                print(f"  Log Loss:    {ev['logloss']}")
+                print(f"  Saved to:    {result['model_dir']}/")
 
         print(f"{'=' * 50}\n")
 

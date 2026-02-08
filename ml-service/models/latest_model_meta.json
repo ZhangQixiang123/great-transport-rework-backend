@@ -1,0 +1,79 @@
+{
+  "timestamp": "20260208_013801",
+  "model_type": "regression",
+  "model_path": "models\\model_20260208_013801.txt",
+  "num_features": 15,
+  "feature_names": [
+    "duration",
+    "duration_bucket",
+    "title_length",
+    "title_has_number",
+    "description_length",
+    "publish_hour",
+    "publish_day_of_week",
+    "has_youtube_source",
+    "yt_log_views",
+    "yt_log_likes",
+    "yt_log_comments",
+    "yt_duration_seconds",
+    "yt_like_view_ratio",
+    "yt_comment_view_ratio",
+    "yt_category_id"
+  ],
+  "label_map": {
+    "failed": 0,
+    "standard": 1,
+    "successful": 2,
+    "viral": 3
+  },
+  "percentile_thresholds": {
+    "p25": 6.418517821187343,
+    "p75": 8.342664955901705,
+    "p95": 10.123979950777647
+  },
+  "params": {
+    "objective": "regression",
+    "metric": "rmse",
+    "num_leaves": 63,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "min_child_samples": 20,
+    "num_threads": -1
+  },
+  "best_iteration": 140,
+  "training_samples": 6194,
+  "test_samples": 1549,
+  "samples_with_youtube": 4490,
+  "gpu_used": false,
+  "evaluation": {
+    "rmse": 1.3413976784263126,
+    "mae": 0.9892040614530874,
+    "median_ae": 0.7213121593513261,
+    "r2": 0.6609715747795979,
+    "correlation": 0.8131109955529671,
+    "within_1_log": 0.6204002582311169,
+    "within_2_log": 0.8773402194964494,
+    "test_samples": 1549,
+    "target_mean": 7.309731917533917,
+    "target_std": 2.303771992682156,
+    "feature_importance": {
+      "duration": 23806.11656689644,
+      "duration_bucket": 2019.3604876995087,
+      "title_length": 36292.332642674446,
+      "title_has_number": 2157.081213593483,
+      "description_length": 52125.540006518364,
+      "publish_hour": 8146.18050801754,
+      "publish_day_of_week": 3699.873644590378,
+      "has_youtube_source": 5968.5790004730225,
+      "yt_log_views": 12461.847082614899,
+      "yt_log_likes": 11389.764609336853,
+      "yt_log_comments": 16825.42509996891,
+      "yt_duration_seconds": 11331.2856631279,
+      "yt_like_view_ratio": 10842.358204245567,
+      "yt_comment_view_ratio": 7251.674688696861,
+      "yt_category_id": 23672.20931005478
+    }
+  }
+}

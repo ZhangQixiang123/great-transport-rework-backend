@@ -523,6 +523,53 @@ class Database:
             ))
         return videos
 
+    def get_labeled_competitor_videos(self) -> List[CompetitorVideo]:
+        """Get all competitor videos that have a valid label (for training).
+
+        Returns videos ordered by publish_time ASC for reproducible splits.
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        cursor = self._conn.execute("""
+            SELECT bvid, bilibili_uid, title, description, duration, views, likes, coins,
+                   favorites, shares, danmaku, comments, publish_time, collected_at,
+                   youtube_source_id, label
+            FROM competitor_videos
+            WHERE label IS NOT NULL AND label != ''
+            ORDER BY publish_time ASC
+        """)
+
+        videos = []
+        for row in cursor.fetchall():
+            publish_time = row["publish_time"]
+            if publish_time and isinstance(publish_time, str):
+                publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
+
+            collected_at = row["collected_at"]
+            if isinstance(collected_at, str):
+                collected_at = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+
+            videos.append(CompetitorVideo(
+                bvid=row["bvid"],
+                bilibili_uid=row["bilibili_uid"],
+                title=row["title"] or "",
+                description=row["description"] or "",
+                duration=row["duration"] or 0,
+                views=row["views"] or 0,
+                likes=row["likes"] or 0,
+                coins=row["coins"] or 0,
+                favorites=row["favorites"] or 0,
+                shares=row["shares"] or 0,
+                danmaku=row["danmaku"] or 0,
+                comments=row["comments"] or 0,
+                publish_time=publish_time,
+                collected_at=collected_at,
+                youtube_source_id=row["youtube_source_id"],
+                label=row["label"]
+            ))
+        return videos
+
     def get_unlabeled_competitor_videos(self, limit: int = 1000) -> List[CompetitorVideo]:
         """Get competitor videos that haven't been labeled yet."""
         return self.get_competitor_videos(label="unlabeled", limit=limit)

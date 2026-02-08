@@ -4,3 +4,26 @@ downloads/
 cookies.json
 *.mp4
 *.webm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+
+# Claude
+.claude/
+
+# Logs
+*.log
+*_log.txt
+
+# ML model binaries (keep metadata, exclude large model files)
+ml-service/models/*.txt
+!ml-service/models/.gitkeep
