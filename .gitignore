@@ -27,3 +27,6 @@ node_modules/
 # ML model binaries (keep metadata, exclude large model files)
 ml-service/models/*.txt
 !ml-service/models/.gitkeep
+
+yt-transfer
+yttransfer
