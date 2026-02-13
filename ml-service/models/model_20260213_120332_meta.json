@@ -1,22 +1,20 @@
 {
-  "timestamp": "20260213_195147",
-  "model_type": "lightgbm",
-  "model_path": "models\\model_20260213_195147.json",
-  "num_features": 43,
+  "timestamp": "20260213_120332",
+  "model_type": "regression",
+  "model_path": "models\\model_20260213_120332.txt",
+  "num_features": 21,
   "feature_names": [
     "duration",
     "duration_bucket",
     "title_length",
     "title_has_number",
     "description_length",
-    "publish_hour_sin",
-    "publish_hour_cos",
-    "publish_dow_sin",
-    "publish_dow_cos",
+    "publish_hour",
+    "publish_day_of_week",
     "has_youtube_source",
-    "title_exclamation_count",
-    "title_question_count",
-    "title_caps_ratio",
+    "channel_mean_log_views",
+    "channel_follower_count",
+    "channel_video_count",
     "yt_log_views",
     "yt_log_likes",
     "yt_log_comments",
@@ -26,29 +24,8 @@
     "yt_category_id",
     "yt_tag_count",
     "yt_upload_delay_days",
-    "yt_stats_imputed",
-    "title_emb_0",
-    "title_emb_1",
-    "title_emb_2",
-    "title_emb_3",
-    "title_emb_4",
-    "title_emb_5",
-    "title_emb_6",
-    "title_emb_7",
-    "title_emb_8",
-    "title_emb_9",
-    "title_emb_10",
-    "title_emb_11",
-    "title_emb_12",
-    "title_emb_13",
-    "title_emb_14",
-    "title_emb_15",
-    "title_emb_16",
-    "title_emb_17",
-    "title_emb_18",
-    "title_emb_19"
+    "yt_stats_imputed"
   ],
-  "use_random_intercepts": false,
   "label_map": {
     "failed": 0,
     "standard": 1,
@@ -56,9 +33,43 @@
     "viral": 3
   },
   "percentile_thresholds": {
-    "p25": 6.123525517933254,
-    "p75": 8.613149958105982,
-    "p95": 10.859810755147224
+    "p25": 6.331859198514718,
+    "p75": 8.403515650112105,
+    "p95": 10.316314042445507
+  },
+  "channel_means": {
+    "816198": 8.823191373999363,
+    "17198256": 7.133537450324202,
+    "13170390": 8.079704641997566,
+    "6856883": 7.089142837078365,
+    "23534705": 9.126944294460225,
+    "3773620": 9.920567101855374,
+    "10523655": 8.03795118848738,
+    "65410812": 7.904497036883684,
+    "33708661": 7.317308550687396,
+    "21416270": 10.194279886357545,
+    "50944796": 7.54980653087361,
+    "520908683": 8.152140233711158,
+    "3457624": 6.687319899013088,
+    "375797865": 6.667538968203476,
+    "66795887": 5.722608533410219,
+    "4390568": 6.090484684047129,
+    "1121309703": 10.109107416587038,
+    "3461582812088629": 11.786954890893924,
+    "544112908": 10.505151932775174,
+    "677245745": 7.558571922281414,
+    "3546858064448344": 8.28803124524393,
+    "662792114": 6.464836948820648,
+    "325069537": 7.567448145930124,
+    "153950464": 5.585016059345505,
+    "401400666": 1.8302138083947102,
+    "40291327": 6.81202975800153,
+    "475981121": 7.049225252034337,
+    "121473911": 6.793205051468639,
+    "3546839982803255": 5.6680038618419175,
+    "1263732318": 6.8156369283357625,
+    "6756999": 3.6799892534708554,
+    "__global__": 7.268859981653994
   },
   "yt_imputation_stats": {
     "per_channel": {
@@ -264,77 +275,211 @@
       "yt_tag_count": 15.039394613843758
     }
   },
-  "params": {
-    "objective": "regression_l2",
-    "learning_rate": 0.05,
-    "num_leaves": 63,
-    "feature_fraction": 0.8,
-    "min_data_in_leaf": 20
+  "channel_info_map": {
+    "375797865": {
+      "follower_count": 29013,
+      "video_count": 2510
+    },
+    "4390568": {
+      "follower_count": 6905,
+      "video_count": 2375
+    },
+    "544112908": {
+      "follower_count": 56586,
+      "video_count": 1515
+    },
+    "677245745": {
+      "follower_count": 114404,
+      "video_count": 841
+    },
+    "662792114": {
+      "follower_count": 157,
+      "video_count": 156
+    },
+    "325069537": {
+      "follower_count": 44213,
+      "video_count": 127
+    },
+    "3546858064448344": {
+      "follower_count": 214420,
+      "video_count": 275
+    },
+    "17198256": {
+      "follower_count": 3289,
+      "video_count": 185
+    },
+    "1121309703": {
+      "follower_count": 264586,
+      "video_count": 55
+    },
+    "50944796": {
+      "follower_count": 12051,
+      "video_count": 74
+    },
+    "121473911": {
+      "follower_count": 128256,
+      "video_count": 32581
+    },
+    "40291327": {
+      "follower_count": 205012,
+      "video_count": 30098
+    },
+    "1263732318": {
+      "follower_count": 613543,
+      "video_count": 15173
+    },
+    "153950464": {
+      "follower_count": 68238,
+      "video_count": 18474
+    },
+    "3546839982803255": {
+      "follower_count": 116838,
+      "video_count": 6907
+    },
+    "6756999": {
+      "follower_count": 6812,
+      "video_count": 3815
+    },
+    "66795887": {
+      "follower_count": 4450,
+      "video_count": 2002
+    },
+    "65410812": {
+      "follower_count": 58079,
+      "video_count": 2005
+    },
+    "401400666": {
+      "follower_count": 156,
+      "video_count": 1487
+    },
+    "3773620": {
+      "follower_count": 46678,
+      "video_count": 799
+    },
+    "6856883": {
+      "follower_count": 6721,
+      "video_count": 739
+    },
+    "3457624": {
+      "follower_count": 5464,
+      "video_count": 939
+    },
+    "21416270": {
+      "follower_count": 246087,
+      "video_count": 560
+    },
+    "475981121": {
+      "follower_count": 6432,
+      "video_count": 527
+    },
+    "33708661": {
+      "follower_count": 13631,
+      "video_count": 502
+    },
+    "23534705": {
+      "follower_count": 102231,
+      "video_count": 464
+    },
+    "13170390": {
+      "follower_count": 3870,
+      "video_count": 269
+    },
+    "520908683": {
+      "follower_count": 13735,
+      "video_count": 231
+    },
+    "816198": {
+      "follower_count": 22438,
+      "video_count": 223
+    },
+    "3461582812088629": {
+      "follower_count": 543351,
+      "video_count": 103
+    },
+    "10523655": {
+      "follower_count": 4449,
+      "video_count": 103
+    }
   },
-  "num_boost_round": 500,
+  "params": {
+    "objective": "regression",
+    "metric": "rmse",
+    "num_leaves": 63,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "min_child_samples": 20,
+    "device": "gpu",
+    "gpu_platform_id": 0,
+    "gpu_device_id": 0
+  },
+  "best_iteration": 113,
   "training_samples": 7743,
+  "val_samples": 775,
   "samples_with_youtube": 4493,
   "unique_channels": 31,
+  "gpu_used": true,
   "cv_evaluation": {
-    "mean_rmse": 2.2803714303943914,
-    "mean_r2": -0.3732841328345293,
-    "mean_mae": 1.8277600754234218,
-    "mean_correlation": 0.26785168658556757,
-    "mean_within_1_log": 0.35715638940811756,
-    "mean_within_2_log": 0.6495591452662228,
+    "mean_rmse": 2.3083800775319467,
+    "mean_r2": -0.35364597691145,
+    "mean_mae": 1.8608255116191779,
+    "mean_correlation": 0.16154139713930787,
+    "mean_within_1_log": 0.3502621639771605,
+    "mean_within_2_log": 0.6325461778328185,
     "n_folds": 5,
     "per_fold": [
       {
-        "rmse": 1.8393718828476768,
-        "mae": 1.4259006734399045,
-        "r2": -0.3954230459033359,
-        "correlation": 0.04737240772493587,
-        "within_1_log": 0.4535483870967742,
-        "within_2_log": 0.7483870967741936,
+        "rmse": 1.841663312333906,
+        "mae": 1.5117016168591058,
+        "r2": -0.39890195652711324,
+        "correlation": -0.03669785185723772,
+        "within_1_log": 0.3858064516129032,
+        "within_2_log": 0.6980645161290323,
         "fold": 0,
         "train_size": 6193,
         "test_size": 1550
       },
       {
-        "rmse": 1.9737942066664433,
-        "mae": 1.501069514292666,
-        "r2": 0.09324879712184753,
-        "correlation": 0.4281457465725188,
-        "within_1_log": 0.44046844502277166,
-        "within_2_log": 0.7449577098243331,
+        "rmse": 2.530511062868654,
+        "mae": 1.9547443934842748,
+        "r2": -0.4903932710603438,
+        "correlation": -0.086619147410456,
+        "within_1_log": 0.372804163955758,
+        "within_2_log": 0.5888093689004554,
         "fold": 1,
         "train_size": 6206,
         "test_size": 1537
       },
       {
-        "rmse": 2.016802516150877,
-        "mae": 1.648876787166287,
-        "r2": 0.10164418782544182,
-        "correlation": 0.4153333388767594,
-        "within_1_log": 0.34377038486627526,
-        "within_2_log": 0.6862361382909328,
+        "rmse": 2.259985046461032,
+        "mae": 1.9263183585455825,
+        "r2": -0.12806146579017974,
+        "correlation": 0.29924057169151924,
+        "within_1_log": 0.21200260926288322,
+        "within_2_log": 0.5955642530984997,
         "fold": 2,
         "train_size": 6210,
         "test_size": 1533
       },
       {
-        "rmse": 3.5447395426706723,
-        "mae": 2.949565311580658,
-        "r2": -0.9430965815979813,
-        "correlation": 0.2827182510434177,
-        "within_1_log": 0.16846105129829006,
-        "within_2_log": 0.3907536415452818,
+        "rmse": 3.3672321071751643,
+        "mae": 2.7777411667851237,
+        "r2": -0.7533629909760993,
+        "correlation": 0.456661067670451,
+        "within_1_log": 0.21722609246358454,
+        "within_2_log": 0.435085497150095,
         "fold": 3,
         "train_size": 6164,
         "test_size": 1579
       },
       {
-        "rmse": 2.0271490036362882,
-        "mae": 1.6133880906375928,
-        "r2": -0.7227940216186188,
-        "correlation": 0.16568868871020603,
-        "within_1_log": 0.3795336787564767,
-        "within_2_log": 0.677461139896373,
+        "rmse": 1.5425088588209759,
+        "mae": 1.1336220224218025,
+        "r2": 0.002489799796486114,
+        "correlation": 0.17512234560226292,
+        "within_1_log": 0.5634715025906736,
+        "within_2_log": 0.8452072538860104,
         "fold": 4,
         "train_size": 6199,
         "test_size": 1544
@@ -342,62 +487,38 @@
     ]
   },
   "evaluation": {
-    "rmse": 0.3164888867983829,
-    "mae": 0.22808087411892455,
-    "median_ae": 0.16655997246646237,
-    "r2": 0.9806183158379765,
-    "correlation": 0.9913427188436846,
-    "within_1_log": 0.9877308536742865,
-    "within_2_log": 0.9997417021826166,
-    "test_samples": 7743,
-    "target_mean": 7.268859981653994,
-    "target_std": 2.2733311807425016,
+    "rmse": 1.086772847808452,
+    "mae": 0.7891369218993171,
+    "median_ae": 0.5831595518463479,
+    "r2": 0.2020292066662901,
+    "correlation": 0.4517603822959632,
+    "within_1_log": 0.7367741935483871,
+    "within_2_log": 0.9329032258064516,
+    "test_samples": 775,
+    "target_mean": 0.0029037658487249935,
+    "target_std": 1.2165929105967108,
     "feature_importance": {
-      "duration": 12904.078952245414,
-      "duration_bucket": 1083.2577035427094,
-      "title_length": 44107.55554281175,
-      "title_has_number": 346.94114831089973,
-      "description_length": 41286.785338908434,
-      "publish_hour_sin": 2580.784783706069,
-      "publish_hour_cos": 2265.6161025241017,
-      "publish_dow_sin": 1663.881873846054,
-      "publish_dow_cos": 1237.9626241773367,
-      "has_youtube_source": 4335.6875689178705,
-      "title_exclamation_count": 1490.841574281454,
-      "title_question_count": 166.9096887782216,
-      "title_caps_ratio": 24484.873991400003,
-      "yt_log_views": 10597.282032057643,
-      "yt_log_likes": 14427.160378992558,
-      "yt_log_comments": 49300.588078290224,
-      "yt_duration_seconds": 7723.638002291322,
-      "yt_like_view_ratio": 13307.646860040724,
-      "yt_comment_view_ratio": 4995.198190361261,
-      "yt_category_id": 19809.1731595546,
-      "yt_tag_count": 6483.664313659072,
-      "yt_upload_delay_days": 35603.60109643638,
-      "yt_stats_imputed": 576.2279067337513,
-      "title_emb_0": 7622.612433329225,
-      "title_emb_1": 6005.650925420225,
-      "title_emb_2": 5656.289859905839,
-      "title_emb_3": 15946.70130956173,
-      "title_emb_4": 5472.149823755026,
-      "title_emb_5": 3172.547683134675,
-      "title_emb_6": 3672.923440821469,
-      "title_emb_7": 4192.516006335616,
-      "title_emb_8": 5395.863823309541,
-      "title_emb_9": 4053.070245116949,
-      "title_emb_10": 4055.5139122083783,
-      "title_emb_11": 4188.3553980737925,
-      "title_emb_12": 4049.599494509399,
-      "title_emb_13": 4216.1467048972845,
-      "title_emb_14": 3555.933640368283,
-      "title_emb_15": 3810.6191333532333,
-      "title_emb_16": 4137.256800189614,
-      "title_emb_17": 4006.383437335491,
-      "title_emb_18": 5088.448108568788,
-      "title_emb_19": 3388.870704740286
+      "duration": 5775.771568655968,
+      "duration_bucket": 391.87747299671173,
+      "title_length": 4458.639027953148,
+      "title_has_number": 458.1609613895416,
+      "description_length": 7942.003101468086,
+      "publish_hour": 2972.4882912635803,
+      "publish_day_of_week": 1836.1815235614777,
+      "has_youtube_source": 1557.7964339256287,
+      "channel_mean_log_views": 3139.014882206917,
+      "channel_follower_count": 2028.619422197342,
+      "channel_video_count": 3213.687346100807,
+      "yt_log_views": 3216.011227250099,
+      "yt_log_likes": 2694.8263038396835,
+      "yt_log_comments": 2555.1382517814636,
+      "yt_duration_seconds": 3801.8764523267746,
+      "yt_like_view_ratio": 3785.3061089515686,
+      "yt_comment_view_ratio": 2633.576665997505,
+      "yt_category_id": 2123.963757753372,
+      "yt_tag_count": 2422.8974103927612,
+      "yt_upload_delay_days": 3403.2882804870605,
+      "yt_stats_imputed": 183.9282214641571
     }
-  },
-  "gp_summary": "N/A (pure LightGBM, no random intercepts)",
-  "embeddings_path": "models/title_embeddings.npz"
+  }
 }
