@@ -33,6 +33,12 @@ class YouTubeCandidate:
     thumbnail_url: str
 
 
+class TranslatedKeyword(BaseModel):
+    """LLM-translated search queries from a Chinese keyword."""
+    english_queries: list[str]  # 2-3 English YouTube search queries
+    topic_summary: str  # Brief English summary of the trending topic
+
+
 class RelevanceResult(BaseModel):
     """LLM-scored relevance between a keyword and a YouTube video."""
     relevance_score: float  # 0.0-1.0

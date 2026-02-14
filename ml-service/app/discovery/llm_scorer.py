@@ -8,16 +8,36 @@ from typing import Optional
 
 import ollama
 
-from .models import RelevanceResult, YouTubeCandidate
+from .models import RelevanceResult, TranslatedKeyword, YouTubeCandidate
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are a video content analyst. You evaluate how relevant a YouTube video "
-    "is to a Bilibili trending keyword. Consider topic match, audience overlap, "
-    "and whether transporting this video to Bilibili would capitalize on the trend. "
+    "You are a video content analyst specializing in cross-platform content. "
+    "You help find English YouTube videos that can be translated and transported "
+    "to Bilibili to capitalize on Chinese trending topics. "
     "Respond in the exact JSON format requested."
 )
+
+TRANSLATE_PROMPT_TEMPLATE = """\
+A Chinese keyword is trending on Bilibili (Chinese video platform): "{keyword}"
+
+Generate 2-3 English search queries to find relevant YouTube videos on this topic.
+The goal is to find English-language YouTube videos that could be translated and \
+re-uploaded to Bilibili to ride this trend.
+
+Rules:
+- Queries must be in English
+- Focus on the underlying topic, not Chinese-specific names/events
+- Make queries specific enough to find relevant content, but broad enough to get results
+- If the keyword is about a Chinese-only event/person with no English equivalent, \
+generate queries about the broader topic instead
+
+Respond with JSON:
+{{
+  "english_queries": ["<query1>", "<query2>"],
+  "topic_summary": "<brief English description of what this keyword is about>"
+}}"""
 
 SCORE_PROMPT_TEMPLATE = """\
 Bilibili trending keyword: "{keyword}"
@@ -78,6 +98,49 @@ class LLMScorer:
                     )
         except Exception as e:
             logger.warning("Cannot connect to Ollama: %s", e)
+
+    def translate_keyword(self, keyword: str) -> Optional[TranslatedKeyword]:
+        """Translate a Chinese trending keyword into English YouTube search queries.
+
+        Args:
+            keyword: Chinese Bilibili trending keyword.
+
+        Returns:
+            TranslatedKeyword with English queries, or None on failure.
+        """
+        prompt = TRANSLATE_PROMPT_TEMPLATE.format(keyword=keyword)
+
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                format=TranslatedKeyword.model_json_schema(),
+            )
+
+            content = response.message.content
+            result = TranslatedKeyword.model_validate_json(content)
+
+            # Filter out empty queries
+            result.english_queries = [q.strip() for q in result.english_queries if q.strip()]
+
+            if not result.english_queries:
+                logger.warning("LLM returned no queries for '%s'", keyword)
+                return None
+
+            logger.info(
+                "Translated '%s' -> %s (%s)",
+                keyword,
+                result.english_queries,
+                result.topic_summary,
+            )
+            return result
+
+        except Exception as e:
+            logger.error("Keyword translation failed for '%s': %s", keyword, e)
+            return None
 
     def score_relevance(
         self, keyword: str, video: YouTubeCandidate

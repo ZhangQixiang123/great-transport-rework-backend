@@ -130,8 +130,21 @@ class DiscoveryPipeline:
         for kw in keywords:
             logger.info("Processing keyword: %s (heat=%d)", kw.keyword, kw.heat_score)
 
-            # 2. Search YouTube
-            candidates = search_youtube_videos(kw.keyword, max_results=videos_per_keyword)
+            # 2a. Translate keyword to English search queries
+            translated = self.scorer.translate_keyword(kw.keyword)
+            if translated is None:
+                logger.warning("Skipping keyword (translation failed): %s", kw.keyword)
+                continue
+
+            # 2b. Search YouTube with each English query
+            seen_video_ids: set[str] = set()
+            candidates: list = []
+            for query in translated.english_queries:
+                results = search_youtube_videos(query, max_results=videos_per_keyword)
+                for c in results:
+                    if c.video_id not in seen_video_ids:
+                        seen_video_ids.add(c.video_id)
+                        candidates.append(c)
             total_candidates += len(candidates)
 
             for candidate in candidates:
