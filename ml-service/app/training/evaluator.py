@@ -113,6 +113,44 @@ class EvaluationReport:
         return json.dumps(self.to_dict(), indent=2)
 
 
+def evaluate_regression_simple(
+    y_pred: np.ndarray,
+    y_test: np.ndarray,
+) -> Dict[str, float]:
+    """Lightweight regression evaluation without feature importance.
+
+    Used for cross-validation folds where we don't need feature importance.
+
+    Args:
+        y_pred: Predicted values.
+        y_test: True target values.
+
+    Returns:
+        Dict with rmse, mae, r2, correlation, within_1_log, within_2_log.
+    """
+    rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+    mae = float(mean_absolute_error(y_test, y_pred))
+    r2 = float(r2_score(y_test, y_pred))
+
+    if np.std(y_test) > 0 and np.std(y_pred) > 0:
+        correlation = float(np.corrcoef(y_test, y_pred)[0, 1])
+    else:
+        correlation = 0.0
+
+    abs_errors = np.abs(y_test - y_pred)
+    within_1 = float(np.mean(abs_errors <= 1.0))
+    within_2 = float(np.mean(abs_errors <= 2.0))
+
+    return {
+        "rmse": rmse,
+        "mae": mae,
+        "r2": r2,
+        "correlation": correlation,
+        "within_1_log": within_1,
+        "within_2_log": within_2,
+    }
+
+
 def evaluate_regression(
     model,
     X_test: np.ndarray,
@@ -151,6 +189,62 @@ def evaluate_regression(
     within_2 = float(np.mean(abs_errors <= 2.0))
 
     # Feature importance (gain)
+    importance = model.feature_importance(importance_type="gain")
+    feat_imp: Dict[str, float] = {}
+    for fname, imp in zip(feature_names, importance):
+        feat_imp[fname] = float(imp)
+
+    return RegressionReport(
+        rmse=rmse,
+        mae=mae,
+        r2=r2,
+        correlation=correlation,
+        median_ae=median_ae,
+        feature_importance=feat_imp,
+        within_1_log=within_1,
+        within_2_log=within_2,
+        test_samples=len(y_test),
+        target_mean=float(np.mean(y_test)),
+        target_std=float(np.std(y_test)),
+    )
+
+
+def evaluate_regression_gpb(
+    model,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    feature_names: List[str],
+    group_data: np.ndarray,
+) -> RegressionReport:
+    """Evaluate a trained GPBoost model on test data.
+
+    Args:
+        model: Trained gpb.Booster instance.
+        X_test: Test feature matrix.
+        y_test: True targets (log_views).
+        feature_names: List of feature column names.
+        group_data: Group array for random effects.
+
+    Returns:
+        RegressionReport with all metrics.
+    """
+    pred_dict = model.predict(data=X_test, group_data_pred=group_data)
+    y_pred = np.array(pred_dict["response_mean"])
+
+    rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+    mae = float(mean_absolute_error(y_test, y_pred))
+    r2 = float(r2_score(y_test, y_pred))
+
+    if np.std(y_test) > 0 and np.std(y_pred) > 0:
+        correlation = float(np.corrcoef(y_test, y_pred)[0, 1])
+    else:
+        correlation = 0.0
+
+    abs_errors = np.abs(y_test - y_pred)
+    median_ae = float(np.median(abs_errors))
+    within_1 = float(np.mean(abs_errors <= 1.0))
+    within_2 = float(np.mean(abs_errors <= 2.0))
+
     importance = model.feature_importance(importance_type="gain")
     feat_imp: Dict[str, float] = {}
     for fname, imp in zip(feature_names, importance):

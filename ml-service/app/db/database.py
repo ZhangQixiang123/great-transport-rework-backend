@@ -615,3 +615,156 @@ class Database:
             summary["total"] += count
 
         return summary
+
+    # Discovery Pipeline Methods
+
+    def ensure_discovery_tables(self) -> None:
+        """Create discovery pipeline tables if they don't exist."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS discovery_runs (
+                run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                keywords_fetched INTEGER,
+                candidates_found INTEGER,
+                recommendations_count INTEGER
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS discovery_recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER REFERENCES discovery_runs(run_id),
+                keyword TEXT NOT NULL,
+                heat_score INTEGER,
+                youtube_video_id TEXT NOT NULL,
+                youtube_title TEXT,
+                youtube_channel TEXT,
+                youtube_views INTEGER,
+                youtube_likes INTEGER,
+                youtube_duration_seconds INTEGER,
+                relevance_score REAL,
+                relevance_reasoning TEXT,
+                predicted_log_views REAL,
+                predicted_views REAL,
+                predicted_label TEXT,
+                combined_score REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_discovery_rec_run
+            ON discovery_recommendations(run_id)
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_discovery_rec_score
+            ON discovery_recommendations(combined_score DESC)
+        """)
+        self._conn.commit()
+
+    def save_discovery_run(
+        self, keywords_fetched: int, candidates_found: int,
+        recommendations_count: int,
+    ) -> int:
+        """Save a discovery run record and return its run_id."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        cursor = self._conn.execute("""
+            INSERT INTO discovery_runs
+                (run_at, keywords_fetched, candidates_found, recommendations_count)
+            VALUES (?, ?, ?, ?)
+        """, (
+            datetime.now().isoformat(), keywords_fetched,
+            candidates_found, recommendations_count,
+        ))
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def save_recommendations(self, run_id: int, recommendations) -> None:
+        """Save a batch of recommendations for a discovery run.
+
+        Args:
+            run_id: ID of the discovery run.
+            recommendations: List of Recommendation dataclass instances.
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        for rec in recommendations:
+            self._conn.execute("""
+                INSERT INTO discovery_recommendations
+                    (run_id, keyword, heat_score, youtube_video_id,
+                     youtube_title, youtube_channel, youtube_views,
+                     youtube_likes, youtube_duration_seconds,
+                     relevance_score, relevance_reasoning,
+                     predicted_log_views, predicted_views, predicted_label,
+                     combined_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                run_id, rec.keyword, rec.heat_score, rec.youtube_video_id,
+                rec.youtube_title, rec.youtube_channel, rec.youtube_views,
+                rec.youtube_likes, rec.youtube_duration_seconds,
+                rec.relevance_score, rec.relevance_reasoning,
+                rec.predicted_log_views, rec.predicted_views,
+                rec.predicted_label, rec.combined_score,
+            ))
+        self._conn.commit()
+
+    def get_discovery_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent discovery run summaries with top recommendations.
+
+        Args:
+            limit: Max number of runs to return.
+
+        Returns:
+            List of dicts with run info and top recommendations.
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        runs = self._conn.execute("""
+            SELECT run_id, run_at, keywords_fetched,
+                   candidates_found, recommendations_count
+            FROM discovery_runs
+            ORDER BY run_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+        results = []
+        for run in runs:
+            recs = self._conn.execute("""
+                SELECT keyword, heat_score, youtube_video_id, youtube_title,
+                       youtube_channel, youtube_views, relevance_score,
+                       predicted_views, predicted_label, combined_score
+                FROM discovery_recommendations
+                WHERE run_id = ?
+                ORDER BY combined_score DESC
+                LIMIT 10
+            """, (run["run_id"],)).fetchall()
+
+            results.append({
+                "run_id": run["run_id"],
+                "run_at": run["run_at"],
+                "keywords_fetched": run["keywords_fetched"],
+                "candidates_found": run["candidates_found"],
+                "recommendations_count": run["recommendations_count"],
+                "top_recommendations": [
+                    {
+                        "keyword": r["keyword"],
+                        "heat_score": r["heat_score"],
+                        "youtube_video_id": r["youtube_video_id"],
+                        "youtube_title": r["youtube_title"],
+                        "youtube_channel": r["youtube_channel"],
+                        "youtube_views": r["youtube_views"],
+                        "relevance_score": r["relevance_score"],
+                        "predicted_views": r["predicted_views"],
+                        "predicted_label": r["predicted_label"],
+                        "combined_score": r["combined_score"],
+                    }
+                    for r in recs
+                ],
+            })
+
+        return results

@@ -12,6 +12,9 @@ Usage:
     python -m app.cli collect-all-competitors --db-path /path/to/db.sqlite
     python -m app.cli label-videos --db-path /path/to/db.sqlite
     python -m app.cli train --db-path /path/to/db.sqlite [--gpu] [--num-rounds 500]
+    python -m app.cli discover --db-path /path/to/db.sqlite
+    python -m app.cli discover-trending --db-path /path/to/db.sqlite
+    python -m app.cli discover-history --db-path /path/to/db.sqlite
 """
 import argparse
 import asyncio
@@ -193,6 +196,51 @@ def parse_args():
         "--no-gpu",
         action="store_true",
         help="Force CPU training"
+    )
+
+    # Discovery pipeline commands
+
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Run the hot words discovery pipeline"
+    )
+    discover_parser.add_argument(
+        "--max-keywords",
+        type=int,
+        default=10,
+        help="Max trending keywords to process (default: 10)"
+    )
+    discover_parser.add_argument(
+        "--videos-per-keyword",
+        type=int,
+        default=5,
+        help="Max YouTube videos per keyword (default: 5)"
+    )
+    discover_parser.add_argument(
+        "--model-dir",
+        default="models",
+        help="Directory with trained model (default: models)"
+    )
+    discover_parser.add_argument(
+        "--llm-model",
+        default="qwen2.5:7b",
+        help="Ollama model for relevance scoring (default: qwen2.5:7b)"
+    )
+
+    discover_trending_parser = subparsers.add_parser(
+        "discover-trending",
+        help="Fetch and display current Bilibili trending keywords"
+    )
+
+    discover_history_parser = subparsers.add_parser(
+        "discover-history",
+        help="Show past discovery run results"
+    )
+    discover_history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Number of recent runs to show (default: 5)"
     )
 
     return parser.parse_args()
@@ -398,6 +446,70 @@ def cmd_train(db: Database, args) -> dict:
     return result
 
 
+async def cmd_discover(db: Database, args) -> dict:
+    """Execute the discover command — full pipeline run."""
+    from .discovery.pipeline import DiscoveryPipeline
+
+    db.ensure_discovery_tables()
+
+    pipeline = DiscoveryPipeline(
+        db, model_dir=args.model_dir, llm_model=args.llm_model,
+    )
+    recommendations = await pipeline.run(
+        max_keywords=args.max_keywords,
+        videos_per_keyword=args.videos_per_keyword,
+    )
+
+    return {
+        "command": "discover",
+        "total_recommendations": len(recommendations),
+        "recommendations": [
+            {
+                "keyword": r.keyword,
+                "heat_score": r.heat_score,
+                "youtube_video_id": r.youtube_video_id,
+                "youtube_title": r.youtube_title,
+                "youtube_channel": r.youtube_channel,
+                "youtube_views": r.youtube_views,
+                "relevance_score": round(r.relevance_score, 3),
+                "predicted_views": round(r.predicted_views, 0) if r.predicted_views else None,
+                "predicted_label": r.predicted_label,
+                "combined_score": round(r.combined_score, 4),
+            }
+            for r in recommendations
+        ],
+    }
+
+
+async def cmd_discover_trending(db: Database, args) -> dict:
+    """Execute the discover-trending command."""
+    from .discovery.trending import fetch_trending_keywords
+
+    keywords = await fetch_trending_keywords()
+    return {
+        "command": "discover-trending",
+        "count": len(keywords),
+        "keywords": [
+            {
+                "keyword": kw.keyword,
+                "heat_score": kw.heat_score,
+                "position": kw.position,
+            }
+            for kw in keywords
+        ],
+    }
+
+
+def cmd_discover_history(db: Database, args) -> dict:
+    """Execute the discover-history command."""
+    db.ensure_discovery_tables()
+    history = db.get_discovery_history(limit=args.limit)
+    return {
+        "command": "discover-history",
+        "runs": history,
+    }
+
+
 def cmd_stats(db: Database, args) -> dict:
     """Execute the stats command."""
     # Get basic counts
@@ -456,6 +568,9 @@ def cmd_stats(db: Database, args) -> dict:
 
 async def main():
     """Main entry point."""
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
     args = parse_args()
 
     with Database(args.db_path) as db:
@@ -479,6 +594,12 @@ async def main():
             result = cmd_training_status(db, args)
         elif args.command == "train":
             result = cmd_train(db, args)
+        elif args.command == "discover":
+            result = await cmd_discover(db, args)
+        elif args.command == "discover-trending":
+            result = await cmd_discover_trending(db, args)
+        elif args.command == "discover-history":
+            result = cmd_discover_history(db, args)
         else:
             logger.error(f"Unknown command: {args.command}")
             sys.exit(1)
@@ -592,6 +713,36 @@ async def main():
                 print(f"  Macro F1:    {ev['macro_f1']}")
                 print(f"  Log Loss:    {ev['logloss']}")
                 print(f"  Saved to:    {result['model_dir']}/")
+
+        elif args.command == "discover":
+            print(f"Recommendations: {result['total_recommendations']}")
+            for i, rec in enumerate(result.get("recommendations", [])[:20], 1):
+                label = rec.get("predicted_label") or "n/a"
+                pv = rec.get("predicted_views")
+                pv_str = f"{pv:,.0f}" if pv else "n/a"
+                print(f"\n  #{i} [{rec['combined_score']:.4f}] {rec['youtube_title'][:60]}")
+                print(f"     Keyword: {rec['keyword']} (heat={rec['heat_score']:,})")
+                print(f"     Channel: {rec['youtube_channel']}")
+                print(f"     YT views: {rec['youtube_views']:,} | Relevance: {rec['relevance_score']:.2f}")
+                print(f"     Predicted: {pv_str} views ({label})")
+
+        elif args.command == "discover-trending":
+            print(f"Trending keywords: {result['count']}")
+            for kw in result.get("keywords", []):
+                print(f"  #{kw['position']:>2} [{kw['heat_score']:>10,}] {kw['keyword']}")
+
+        elif args.command == "discover-history":
+            runs = result.get("runs", [])
+            if not runs:
+                print("No discovery runs found.")
+            for run in runs:
+                print(f"\n  Run #{run['run_id']} at {run['run_at']}")
+                print(f"    Keywords: {run['keywords_fetched']}, "
+                      f"Candidates: {run['candidates_found']}, "
+                      f"Recommendations: {run['recommendations_count']}")
+                for rec in run.get("top_recommendations", [])[:5]:
+                    print(f"    [{rec['combined_score']:.4f}] {rec['youtube_title'][:50]} "
+                          f"({rec['keyword']})")
 
         print(f"{'=' * 50}\n")
 
