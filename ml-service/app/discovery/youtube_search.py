@@ -3,9 +3,9 @@ Search YouTube for videos matching a keyword, with full stats enrichment.
 
 Reuses the same API key and httpx patterns from enrich_youtube.py.
 """
-import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -28,7 +28,7 @@ def _parse_duration(duration_str: str) -> int:
 
 
 def search_youtube_videos(
-    keyword: str, max_results: int = 10
+    keyword: str, max_results: int = 10, max_age_days: int = 30,
 ) -> list[YouTubeCandidate]:
     """Search YouTube for videos matching a keyword and fetch their stats.
 
@@ -38,6 +38,8 @@ def search_youtube_videos(
     Args:
         keyword: Search query string.
         max_results: Max number of results to return (1-50).
+        max_age_days: Only return videos published within this many days.
+            Set to 0 to disable the recency filter.
 
     Returns:
         List of YouTubeCandidate with full stats populated.
@@ -45,16 +47,21 @@ def search_youtube_videos(
     client = httpx.Client()
     try:
         # Step 1: Search for video IDs
+        params = {
+            "part": "snippet",
+            "q": keyword,
+            "type": "video",
+            "maxResults": min(max_results, 50),
+            "order": "relevance",
+            "key": YOUTUBE_API_KEY,
+        }
+        if max_age_days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            params["publishedAfter"] = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
         resp = client.get(
             "https://www.googleapis.com/youtube/v3/search",
-            params={
-                "part": "snippet",
-                "q": keyword,
-                "type": "video",
-                "maxResults": min(max_results, 50),
-                "order": "relevance",
-                "key": YOUTUBE_API_KEY,
-            },
+            params=params,
             timeout=30,
         )
         resp.raise_for_status()

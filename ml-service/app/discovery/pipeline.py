@@ -94,20 +94,24 @@ class DiscoveryPipeline:
         self,
         max_keywords: int = 10,
         videos_per_keyword: int = 5,
+        max_age_days: int = 30,
     ) -> list[Recommendation]:
         """Run the full discovery pipeline.
 
         Steps:
             1. Fetch trending keywords from Bilibili
-            2. For each keyword, search YouTube for candidates
-            3. Score relevance with LLM
-            4. Predict Bilibili views with ML model
-            5. Compute combined score and rank
-            6. Save results to DB
+            2. For each keyword, translate to English and search YouTube
+            3. Filter out already-transported / old videos
+            4. Score relevance with LLM
+            5. Predict Bilibili views with ML model
+            6. Compute combined score and rank
+            7. Save results to DB
 
         Args:
             max_keywords: Max trending keywords to process.
             videos_per_keyword: Max YouTube videos per keyword.
+            max_age_days: Only consider YouTube videos published within
+                this many days. Set to 0 to disable.
 
         Returns:
             Ranked list of Recommendations.
@@ -123,9 +127,16 @@ class DiscoveryPipeline:
 
         logger.info("Got %d keywords", len(keywords))
 
-        # 2-4. Process each keyword
+        # Load already-transported video IDs to skip duplicates
+        self.db.ensure_discovery_tables()
+        already_seen = self.db.get_already_transported_yt_ids()
+        if already_seen:
+            logger.info("Loaded %d already-transported/recommended video IDs", len(already_seen))
+
+        # 2-5. Process each keyword
         all_recommendations: list[Recommendation] = []
         total_candidates = 0
+        skipped_already_seen = 0
 
         for kw in keywords:
             logger.info("Processing keyword: %s (heat=%d)", kw.keyword, kw.heat_score)
@@ -136,11 +147,13 @@ class DiscoveryPipeline:
                 logger.warning("Skipping keyword (translation failed): %s", kw.keyword)
                 continue
 
-            # 2b. Search YouTube with each English query
+            # 2b. Search YouTube with each English query (recency-filtered)
             seen_video_ids: set[str] = set()
             candidates: list = []
             for query in translated.english_queries:
-                results = search_youtube_videos(query, max_results=videos_per_keyword)
+                results = search_youtube_videos(
+                    query, max_results=videos_per_keyword, max_age_days=max_age_days,
+                )
                 for c in results:
                     if c.video_id not in seen_video_ids:
                         seen_video_ids.add(c.video_id)
@@ -148,6 +161,14 @@ class DiscoveryPipeline:
             total_candidates += len(candidates)
 
             for candidate in candidates:
+                # 3. Skip already-transported or previously-recommended videos
+                if candidate.video_id in already_seen:
+                    skipped_already_seen += 1
+                    logger.debug(
+                        "Skipping already-seen video: %s (%s)",
+                        candidate.video_id, candidate.title[:40],
+                    )
+                    continue
                 # 3. Score relevance with LLM
                 relevance = self.scorer.score_relevance(kw.keyword, candidate)
                 if relevance is None:
@@ -217,10 +238,12 @@ class DiscoveryPipeline:
         self.db.save_recommendations(run_id, all_recommendations)
 
         logger.info(
-            "Pipeline complete: %d keywords, %d candidates, %d recommendations",
+            "Pipeline complete: %d keywords, %d candidates, %d recommendations "
+            "(skipped %d already-seen)",
             len(keywords),
             total_candidates,
             len(all_recommendations),
+            skipped_already_seen,
         )
         return all_recommendations
 

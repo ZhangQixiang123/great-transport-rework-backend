@@ -226,6 +226,12 @@ def parse_args():
         default="qwen2.5:7b",
         help="Ollama model for relevance scoring (default: qwen2.5:7b)"
     )
+    discover_parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=30,
+        help="Only consider YouTube videos published within N days (default: 30, 0=no limit)"
+    )
 
     discover_trending_parser = subparsers.add_parser(
         "discover-trending",
@@ -458,6 +464,7 @@ async def cmd_discover(db: Database, args) -> dict:
     recommendations = await pipeline.run(
         max_keywords=args.max_keywords,
         videos_per_keyword=args.videos_per_keyword,
+        max_age_days=args.max_age_days,
     )
 
     return {

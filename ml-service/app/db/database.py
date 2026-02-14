@@ -768,3 +768,36 @@ class Database:
             })
 
         return results
+
+    def get_already_transported_yt_ids(self) -> set:
+        """Return YouTube video IDs that have already been transported or recommended.
+
+        Checks both:
+        - competitor_videos.youtube_source_id (already on Bilibili)
+        - discovery_recommendations.youtube_video_id (previously recommended)
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        ids = set()
+
+        # Videos already transported to Bilibili
+        try:
+            rows = self._conn.execute("""
+                SELECT DISTINCT youtube_source_id FROM competitor_videos
+                WHERE youtube_source_id IS NOT NULL AND youtube_source_id != ''
+            """).fetchall()
+            ids.update(row["youtube_source_id"] for row in rows)
+        except Exception:
+            pass  # Table may not exist yet
+
+        # Videos already recommended in past runs
+        try:
+            rows = self._conn.execute("""
+                SELECT DISTINCT youtube_video_id FROM discovery_recommendations
+            """).fetchall()
+            ids.update(row["youtube_video_id"] for row in rows)
+        except Exception:
+            pass  # Table may not exist yet
+
+        return ids
