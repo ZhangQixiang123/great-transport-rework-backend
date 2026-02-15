@@ -4,6 +4,7 @@ Search YouTube for videos matching a keyword, with full stats enrichment.
 Reuses the same API key and httpx patterns from enrich_youtube.py.
 """
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +14,7 @@ from .models import YouTubeCandidate
 
 logger = logging.getLogger(__name__)
 
-YOUTUBE_API_KEY = "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U"
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U")
 
 
 def _parse_duration(duration_str: str) -> int:

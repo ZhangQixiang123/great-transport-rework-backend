@@ -432,6 +432,132 @@ class TestGetAllUploadsWithBvid:
             assert "BV1test456" in bvids
 
 
+class TestPendingRecommendations:
+    """Tests for get_pending_recommendations and mark_recommendation_uploaded."""
+
+    def test_returns_empty_when_no_recommendations(self, temp_db):
+        """Test returns empty list when no recommendations exist."""
+        with Database(temp_db) as db:
+            db.ensure_discovery_tables()
+            picks = db.get_pending_recommendations(limit=2)
+            assert picks == []
+
+    def test_returns_pending_ordered_by_score(self, temp_db):
+        """Test returns pending recommendations sorted by combined_score DESC."""
+        with Database(temp_db) as db:
+            db.ensure_discovery_tables()
+            run_id = db.save_discovery_run(5, 10, 3)
+
+            # Insert test recommendations directly
+            for vid, score in [("AAA", 0.5), ("BBB", 0.9), ("CCC", 0.7)]:
+                db._conn.execute("""
+                    INSERT INTO discovery_recommendations
+                        (run_id, keyword, heat_score, youtube_video_id,
+                         youtube_title, youtube_channel, youtube_views,
+                         youtube_likes, youtube_duration_seconds,
+                         relevance_score, predicted_views, predicted_label,
+                         combined_score, status)
+                    VALUES (?, 'test', 100, ?, ?, 'ch', 10000, 500, 300,
+                            0.8, 50000, 'successful', ?, 'pending')
+                """, (run_id, vid, f"Title {vid}", score))
+            db._conn.commit()
+
+            picks = db.get_pending_recommendations(limit=2)
+            assert len(picks) == 2
+            assert picks[0]["youtube_video_id"] == "BBB"
+            assert picks[0]["combined_score"] == 0.9
+            assert picks[1]["youtube_video_id"] == "CCC"
+
+    def test_excludes_uploaded(self, temp_db):
+        """Test that uploaded recommendations are excluded."""
+        with Database(temp_db) as db:
+            db.ensure_discovery_tables()
+            run_id = db.save_discovery_run(5, 10, 2)
+
+            for vid, status in [("AAA", "uploaded"), ("BBB", "pending")]:
+                db._conn.execute("""
+                    INSERT INTO discovery_recommendations
+                        (run_id, keyword, heat_score, youtube_video_id,
+                         youtube_title, youtube_channel, youtube_views,
+                         youtube_likes, youtube_duration_seconds,
+                         relevance_score, predicted_views, predicted_label,
+                         combined_score, status)
+                    VALUES (?, 'test', 100, ?, 'Title', 'ch', 10000, 500, 300,
+                            0.8, 50000, 'successful', 0.8, ?)
+                """, (run_id, vid, status))
+            db._conn.commit()
+
+            picks = db.get_pending_recommendations(limit=5)
+            assert len(picks) == 1
+            assert picks[0]["youtube_video_id"] == "BBB"
+
+    def test_mark_recommendation_uploaded(self, temp_db):
+        """Test marking a recommendation as uploaded."""
+        with Database(temp_db) as db:
+            db.ensure_discovery_tables()
+            run_id = db.save_discovery_run(5, 10, 1)
+
+            db._conn.execute("""
+                INSERT INTO discovery_recommendations
+                    (run_id, keyword, heat_score, youtube_video_id,
+                     youtube_title, youtube_channel, youtube_views,
+                     youtube_likes, youtube_duration_seconds,
+                     relevance_score, predicted_views, predicted_label,
+                     combined_score, status)
+                VALUES (?, 'test', 100, 'VID123', 'Title', 'ch', 10000, 500, 300,
+                        0.8, 50000, 'successful', 0.8, 'pending')
+            """, (run_id,))
+            db._conn.commit()
+
+            # Verify it's pending
+            picks = db.get_pending_recommendations(limit=5)
+            assert len(picks) == 1
+
+            # Mark uploaded
+            db.mark_recommendation_uploaded("VID123")
+
+            # Should no longer appear
+            picks = db.get_pending_recommendations(limit=5)
+            assert len(picks) == 0
+
+            # Verify status in DB
+            row = db._conn.execute(
+                "SELECT status FROM discovery_recommendations WHERE youtube_video_id = ?",
+                ("VID123",)
+            ).fetchone()
+            assert row["status"] == "uploaded"
+
+    def test_limit_respected(self, temp_db):
+        """Test that the limit parameter is respected."""
+        with Database(temp_db) as db:
+            db.ensure_discovery_tables()
+            run_id = db.save_discovery_run(5, 10, 5)
+
+            for i in range(5):
+                db._conn.execute("""
+                    INSERT INTO discovery_recommendations
+                        (run_id, keyword, heat_score, youtube_video_id,
+                         youtube_title, youtube_channel, youtube_views,
+                         youtube_likes, youtube_duration_seconds,
+                         relevance_score, predicted_views, predicted_label,
+                         combined_score, status)
+                    VALUES (?, 'test', 100, ?, 'Title', 'ch', 10000, 500, 300,
+                            0.8, 50000, 'successful', ?, 'pending')
+                """, (run_id, f"VID{i}", 0.5 + i * 0.1))
+            db._conn.commit()
+
+            picks = db.get_pending_recommendations(limit=3)
+            assert len(picks) == 3
+
+    def test_not_connected_raises(self, temp_db):
+        """Test that methods raise when not connected."""
+        db = Database(temp_db)
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.get_pending_recommendations()
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.mark_recommendation_uploaded("VID123")
+
+
 class TestDatabaseErrors:
     """Tests for database error handling."""
 

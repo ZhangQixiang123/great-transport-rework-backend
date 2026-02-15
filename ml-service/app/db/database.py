@@ -650,9 +650,18 @@ class Database:
                 predicted_views REAL,
                 predicted_label TEXT,
                 combined_score REAL,
+                status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migrate: add status column if table already exists without it
+        try:
+            self._conn.execute(
+                "ALTER TABLE discovery_recommendations ADD COLUMN status TEXT DEFAULT 'pending'"
+            )
+            self._conn.commit()
+        except Exception:
+            pass  # Column already exists
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_discovery_rec_run
             ON discovery_recommendations(run_id)
@@ -768,6 +777,66 @@ class Database:
             })
 
         return results
+
+    def get_pending_recommendations(self, limit: int = 2) -> List[Dict[str, Any]]:
+        """Get top pending recommendations ordered by combined_score.
+
+        Args:
+            limit: Max number of recommendations to return.
+
+        Returns:
+            List of dicts with recommendation details.
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        cursor = self._conn.execute("""
+            SELECT id, run_id, keyword, heat_score, youtube_video_id,
+                   youtube_title, youtube_channel, youtube_views,
+                   youtube_likes, youtube_duration_seconds,
+                   relevance_score, predicted_views, predicted_label,
+                   combined_score, created_at
+            FROM discovery_recommendations
+            WHERE status = 'pending'
+            ORDER BY combined_score DESC
+            LIMIT ?
+        """, (limit,))
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row["id"],
+                "run_id": row["run_id"],
+                "keyword": row["keyword"],
+                "heat_score": row["heat_score"],
+                "youtube_video_id": row["youtube_video_id"],
+                "youtube_title": row["youtube_title"],
+                "youtube_channel": row["youtube_channel"],
+                "youtube_views": row["youtube_views"],
+                "youtube_likes": row["youtube_likes"],
+                "youtube_duration_seconds": row["youtube_duration_seconds"],
+                "relevance_score": row["relevance_score"],
+                "predicted_views": row["predicted_views"],
+                "predicted_label": row["predicted_label"],
+                "combined_score": row["combined_score"],
+                "created_at": row["created_at"],
+            })
+        return results
+
+    def mark_recommendation_uploaded(self, youtube_video_id: str) -> None:
+        """Mark a recommendation as uploaded by its YouTube video ID.
+
+        Args:
+            youtube_video_id: The YouTube video ID to mark as uploaded.
+        """
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        self._conn.execute(
+            "UPDATE discovery_recommendations SET status = 'uploaded' WHERE youtube_video_id = ?",
+            (youtube_video_id,)
+        )
+        self._conn.commit()
 
     def get_already_transported_yt_ids(self) -> set:
         """Return YouTube video IDs that have already been transported or recommended.
