@@ -64,7 +64,9 @@ def setup_logging() -> logging.Logger:
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    sh = logging.StreamHandler(sys.stdout)
+    sh = logging.StreamHandler(
+        open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
+    )
     sh.setFormatter(fmt)
     logger.addHandler(sh)
 
@@ -78,14 +80,14 @@ def run_discovery(logger: logging.Logger) -> bool:
     """Run the discovery pipeline via CLI subprocess."""
     logger.info("=== Step 1: Running discovery pipeline ===")
     cmd = [
-        sys.executable, "-m", "app.cli", "discover",
+        sys.executable, "-m", "app.cli",
+        "--db-path", DB_PATH, "--json",
+        "discover",
         "--model-dir", MODEL_DIR,
         "--llm-model", LLM_MODEL,
         "--max-keywords", str(MAX_KEYWORDS),
         "--videos-per-keyword", str(VIDEOS_PER_KEYWORD),
         "--max-age-days", str(MAX_AGE_DAYS),
-        "--db-path", DB_PATH,
-        "--json",
     ]
     logger.info("CMD: %s", " ".join(cmd))
     result = subprocess.run(
