@@ -35,8 +35,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DB_PATH = os.environ.get("DB_PATH", str(SCRIPT_DIR / "data.db"))
-TRANSPORT_BINARY = os.environ.get("TRANSPORT_BINARY", str(SCRIPT_DIR.parent / "yt-transfer"))
-BILIUP_COOKIE = os.environ.get("BILIUP_COOKIE", str(SCRIPT_DIR.parent / "cookies.json"))
+_default_binary = SCRIPT_DIR.parent / ("yt-transfer.exe" if sys.platform == "win32" else "yt-transfer")
+TRANSPORT_BINARY = os.environ.get("TRANSPORT_BINARY", str(_default_binary))
+BILIUP_COOKIE = os.environ.get("BILIUP_COOKIE", str(SCRIPT_DIR.parent / "scripts" / "cookies.json"))
 UPLOAD_COUNT = int(os.environ.get("UPLOAD_COUNT", "2"))
 MODEL_DIR = os.environ.get("MODEL_DIR", str(SCRIPT_DIR / "models"))
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
@@ -134,12 +135,20 @@ def transfer_video(video_id: str, logger: logging.Logger) -> bool:
         "--biliup-cookie", BILIUP_COOKIE,
     ]
     logger.info("CMD: %s", " ".join(cmd))
+    # Add venv Scripts dir to PATH so yt-transfer can find yt-dlp & biliup
+    env = os.environ.copy()
+    venv_bin = str(SCRIPT_DIR / ".venv" / ("Scripts" if sys.platform == "win32" else "bin"))
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+    env["PYTHONIOENCODING"] = "utf-8"
     result = subprocess.run(
         cmd,
-        capture_output=True,
-        text=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         timeout=1800,  # 30 min per video
     )
+    result.stdout = result.stdout.decode("utf-8", errors="replace")
+    result.stderr = result.stderr.decode("utf-8", errors="replace")
     if result.returncode != 0:
         logger.error("yt-transfer failed (exit %d):\n%s", result.returncode, result.stderr)
         return False
