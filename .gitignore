@@ -29,5 +29,7 @@ ml-service/models/*.txt
 !ml-service/models/.gitkeep
 
 yt-transfer
+yt-transfer.exe
 yttransfer
+*.png
 discovery_results.txt
