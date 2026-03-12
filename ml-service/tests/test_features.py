@@ -14,6 +14,7 @@ from app.training.features import (
     FEATURE_NAMES,
     N_EMBEDDING_DIMS,
     PRE_UPLOAD_FEATURES,
+    RAG_FEATURES,
     YOUTUBE_FEATURES,
     LABEL_MAP,
     _duration_bucket,
@@ -213,6 +214,17 @@ class TestExtractFeaturesSingle:
         features = extract_features_single(video, yt_stats=yt_stats)
         assert features["yt_upload_delay_days"] == 0.0
 
+    def test_yt_upload_delay_nonzero_with_publish_time(self):
+        """With a non-None publish_time and past YT date, delay is positive."""
+        video = _make_video(publish_time=datetime.now())
+        yt_stats = {
+            "yt_views": 1000, "yt_likes": 50, "yt_comments": 5,
+            "yt_duration_seconds": 300, "yt_category_id": 22,
+            "yt_published_at": "2024-01-01T00:00:00Z",
+        }
+        features = extract_features_single(video, yt_stats=yt_stats)
+        assert features["yt_upload_delay_days"] > 0
+
     def test_yt_stats_imputed_flag(self):
         """yt_stats_imputed flag reflects imputation status."""
         video = _make_video()
@@ -375,9 +387,13 @@ class TestFeatureNames:
     def test_total_feature_count(self):
         expected = (len(PRE_UPLOAD_FEATURES) + len(CLICKBAIT_FEATURES)
                     + len(YOUTUBE_FEATURES)
-                    + len(ADDITIONAL_FEATURES) + len(EMBEDDING_FEATURES))
+                    + len(ADDITIONAL_FEATURES) + len(EMBEDDING_FEATURES)
+                    + len(RAG_FEATURES))
         assert len(FEATURE_NAMES) == expected
-        assert len(FEATURE_NAMES) == 43
+        assert len(FEATURE_NAMES) == 48
+
+    def test_rag_feature_count(self):
+        assert len(RAG_FEATURES) == 5
 
     def test_no_circular_features(self):
         """Verify no post-upload metrics in feature list."""
@@ -437,3 +453,49 @@ class TestComputeYtImputationStats:
         stats = compute_yt_imputation_stats(videos, yt_map)
         assert stats["per_channel"] == {}
         assert stats["global"] == {}
+
+
+class TestRAGFeatures:
+    def test_rag_features_default_to_zero(self):
+        """Without rag_features, RAG features are 0."""
+        video = _make_video()
+        features = extract_features_single(video)
+        for feat in RAG_FEATURES:
+            assert features[feat] == 0.0
+
+    def test_rag_features_passed_through(self):
+        """RAG features are populated from rag_features dict."""
+        video = _make_video()
+        rag = {
+            "rag_similar_median_log_views": 10.5,
+            "rag_similar_mean_log_views": 10.2,
+            "rag_similar_std_log_views": 1.3,
+            "rag_similar_max_log_views": 13.0,
+            "rag_top5_mean_log_views": 11.0,
+        }
+        features = extract_features_single(video, rag_features=rag)
+        for key, val in rag.items():
+            assert features[key] == pytest.approx(val)
+
+    def test_rag_features_partial_defaults(self):
+        """Missing RAG keys default to 0.0."""
+        video = _make_video()
+        rag = {"rag_similar_median_log_views": 10.5}
+        features = extract_features_single(video, rag_features=rag)
+        assert features["rag_similar_median_log_views"] == 10.5
+        assert features["rag_similar_mean_log_views"] == 0.0
+
+    def test_dataframe_with_rag_features(self):
+        """extract_features_dataframe passes rag_features_list through."""
+        videos = [_make_video(bvid="BV1"), _make_video(bvid="BV2")]
+        rag_list = [
+            {"rag_similar_median_log_views": 10.0,
+             "rag_similar_mean_log_views": 9.5,
+             "rag_similar_std_log_views": 1.0,
+             "rag_similar_max_log_views": 12.0,
+             "rag_top5_mean_log_views": 10.5},
+            None,
+        ]
+        df = extract_features_dataframe(videos, rag_features_list=rag_list)
+        assert df.loc[0, "rag_similar_median_log_views"] == pytest.approx(10.0)
+        assert df.loc[1, "rag_similar_median_log_views"] == 0.0

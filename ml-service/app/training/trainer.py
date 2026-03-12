@@ -17,6 +17,8 @@ import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+import joblib
+
 import gpboost as gpb
 import lightgbm as lgb
 import numpy as np
@@ -31,8 +33,76 @@ from .features import (
     load_regression_data,
 )
 from ..db.database import CompetitorVideo, Database
+from ..embeddings.model import TitleEmbedder
+from ..embeddings.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+
+def _load_embedder_and_store(
+    model_dir: str,
+    videos: List[CompetitorVideo],
+    raw_targets: np.ndarray,
+    batch_size: int = 64,
+) -> tuple:
+    """Try to load fine-tuned embedder, compute embeddings, and build VectorStore.
+
+    Returns:
+        Tuple of (embedder, fine_tuned_embeddings, vector_store).
+        All None if embedder not found.
+    """
+    embedder_path = os.path.join(model_dir, "embedder.pt")
+    if not os.path.exists(embedder_path):
+        logger.info("No fine-tuned embedder found at %s", embedder_path)
+        return None, None, None
+
+    try:
+        embedder = TitleEmbedder.load(embedder_path)
+        logger.info("Loaded fine-tuned embedder from %s", embedder_path)
+
+        all_titles = [v.title for v in videos]
+        fine_embs = embedder.encode(all_titles, batch_size=batch_size)
+        logger.info("Encoded %d titles -> shape %s", len(all_titles), fine_embs.shape)
+
+        store = VectorStore()
+        all_bvids = [v.bvid for v in videos]
+        all_channels = [v.bilibili_uid for v in videos]
+        store.build(fine_embs, all_bvids, raw_targets, all_channels)
+
+        return embedder, fine_embs, store
+    except Exception:
+        logger.warning("Failed to load embedder or build VectorStore", exc_info=True)
+        return None, None, None
+
+
+def _compute_rag_features(
+    store: VectorStore,
+    embeddings: np.ndarray,
+    videos: List[CompetitorVideo],
+    exclude_channels: Optional[set] = None,
+) -> List[Dict]:
+    """Compute RAG features for each video using the VectorStore.
+
+    Args:
+        store: Built VectorStore.
+        embeddings: Fine-tuned embeddings, shape [N, dim].
+        videos: List of videos (same order as embeddings).
+        exclude_channels: If set, exclude these channels from retrieval
+                          (for cross-validation leakage prevention).
+
+    Returns:
+        List of RAG feature dicts, one per video.
+    """
+    rag_list = []
+    for i, v in enumerate(videos):
+        exclude_ch = v.bilibili_uid if exclude_channels and v.bilibili_uid in exclude_channels else None
+        rag = store.query(
+            embeddings[i],
+            exclude_bvid=v.bvid,
+            exclude_channel=exclude_ch,
+        )
+        rag_list.append(rag)
+    return rag_list
+
 
 DEFAULT_PARAMS = {
     "objective": "regression_l2",
@@ -99,6 +169,26 @@ def train_model(
     has_emb = sum(1 for v in videos if v.bvid in embedding_map)
     logger.info("Samples with title embeddings: %d/%d", has_emb, total)
 
+    # Try to load fine-tuned embedder and build VectorStore
+    embedder, fine_embs, vector_store = _load_embedder_and_store(
+        model_dir, videos, raw_targets,
+    )
+    has_rag = embedder is not None
+    if has_rag:
+        logger.info("Fine-tuned embedder loaded, RAG features enabled")
+        # Regenerate PCA embedding_map from fine-tuned embeddings
+        from sklearn.decomposition import PCA
+        from .features import N_EMBEDDING_DIMS
+        pca = PCA(n_components=N_EMBEDDING_DIMS)
+        pca_embs = pca.fit_transform(fine_embs)
+        logger.info("PCA variance explained: %.3f", sum(pca.explained_variance_ratio_))
+        pca_path = os.path.join(model_dir, "pca.pkl")
+        joblib.dump(pca, pca_path)
+        logger.info("PCA saved to %s", pca_path)
+        embedding_map = {v.bvid: pca_embs[i] for i, v in enumerate(videos)}
+        has_emb = total
+        logger.info("Regenerated PCA embeddings from fine-tuned model for all %d videos", total)
+
     # Build params
     params = DEFAULT_PARAMS.copy()
     if learning_rate is not None:
@@ -128,16 +218,32 @@ def train_model(
             # Imputation stats from training fold only
             fold_yt_imp = compute_yt_imputation_stats(train_videos, yt_stats_map)
 
+            # Compute RAG features if available
+            train_rag = None
+            test_rag = None
+            if has_rag and vector_store is not None and fine_embs is not None:
+                test_channel_set = set(test_groups)
+                train_rag = _compute_rag_features(
+                    vector_store, fine_embs[train_idx], train_videos,
+                    exclude_channels=None,
+                )
+                test_rag = _compute_rag_features(
+                    vector_store, fine_embs[test_idx], test_videos,
+                    exclude_channels=test_channel_set,
+                )
+
             # Build feature matrices
             X_train_df = extract_features_dataframe(
                 train_videos, yt_stats_map=yt_stats_map,
                 yt_imputation_stats=fold_yt_imp,
                 embedding_map=embedding_map,
+                rag_features_list=train_rag,
             )
             X_test_df = extract_features_dataframe(
                 test_videos, yt_stats_map=yt_stats_map,
                 yt_imputation_stats=fold_yt_imp,
                 embedding_map=embedding_map,
+                rag_features_list=test_rag,
             )
 
             if use_random_intercepts:
@@ -195,10 +301,18 @@ def train_model(
 
     final_yt_imp = compute_yt_imputation_stats(videos, yt_stats_map)
 
+    # Compute RAG features for final training (no channel exclusion)
+    final_rag = None
+    if has_rag and vector_store is not None and fine_embs is not None:
+        final_rag = _compute_rag_features(
+            vector_store, fine_embs, videos, exclude_channels=None,
+        )
+
     all_features = extract_features_dataframe(
         videos, yt_stats_map=yt_stats_map,
         yt_imputation_stats=final_yt_imp,
         embedding_map=embedding_map,
+        rag_features_list=final_rag,
     )
 
     logger.info(
@@ -262,6 +376,12 @@ def train_model(
     logger.info("  standard:   %.2f <= pred < %.2f", percentiles["p25"], percentiles["p75"])
     logger.info("  successful: %.2f <= pred < %.2f", percentiles["p75"], percentiles["p95"])
     logger.info("  viral:      pred >= %.2f (>= %.0f views)", percentiles["p95"], math.expm1(percentiles["p95"]))
+
+    # Save VectorStore if available
+    if has_rag and vector_store is not None:
+        vs_path = os.path.join(model_dir, "vector_store.npz")
+        vector_store.save(vs_path)
+        logger.info("VectorStore saved to %s", vs_path)
 
     # Save model
     os.makedirs(model_dir, exist_ok=True)

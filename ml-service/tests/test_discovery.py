@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.db.database import Database
 from app.discovery.models import (
+    CandidateEvaluation,
     Recommendation,
     RelevanceResult,
     TrendingKeyword,
@@ -66,20 +67,26 @@ def _make_candidate(video_id="abc123", title="Test Video", views=50000):
 
 def _make_recommendation(**kwargs):
     defaults = dict(
-        keyword="test keyword",
-        heat_score=500000,
+        strategy="educational_explainer",
+        query_used="test query",
         youtube_video_id="abc123",
         youtube_title="Test Video",
         youtube_channel="TestChannel",
         youtube_views=50000,
         youtube_likes=1000,
         youtube_duration_seconds=600,
-        relevance_score=0.85,
-        relevance_reasoning="Topic matches well",
+        nn_prediction=9.5,
+        novelty_score=0.8,
         predicted_log_views=10.5,
         predicted_views=36000.0,
         predicted_label="successful",
+        confidence=0.8,
+        reasoning="Good transport candidate",
         combined_score=0.75,
+        keyword="test keyword",
+        heat_score=500000,
+        relevance_score=0.85,
+        relevance_reasoning="Topic matches well",
     )
     defaults.update(kwargs)
     return Recommendation(**defaults)
@@ -132,14 +139,42 @@ class TestRelevanceResult:
         assert r2.detected_topics == ["tech", "review"]
 
 
+class TestCandidateEvaluation:
+    def test_create(self):
+        e = CandidateEvaluation(
+            predicted_log_views=10.5,
+            predicted_views=36000,
+            confidence=0.8,
+            label="successful",
+            reasoning="Good match",
+        )
+        assert e.label == "successful"
+        assert e.confidence == 0.8
+
+    def test_json_roundtrip(self):
+        e = CandidateEvaluation(
+            predicted_log_views=9.2,
+            predicted_views=10000,
+            confidence=0.6,
+            label="standard",
+            reasoning="Average content",
+        )
+        json_str = e.model_dump_json()
+        e2 = CandidateEvaluation.model_validate_json(json_str)
+        assert e2.predicted_log_views == 9.2
+        assert e2.label == "standard"
+
+
 class TestRecommendation:
     def test_create(self):
         rec = _make_recommendation()
         assert rec.combined_score == 0.75
         assert rec.predicted_label == "successful"
+        assert rec.strategy == "educational_explainer"
 
     def test_nullable_predictions(self):
         rec = _make_recommendation(
+            nn_prediction=None,
             predicted_log_views=None,
             predicted_views=None,
             predicted_label=None,
@@ -321,124 +356,252 @@ class TestYouTubeSearch:
 
 
 class TestLLMScorer:
-    @patch("app.discovery.llm_scorer.ollama")
-    def test_score_relevance(self, mock_ollama):
-        mock_ollama.list.return_value = MagicMock(
-            models=[MagicMock(model="qwen2.5:7b")]
-        )
+    def _make_mock_backend(self, response_text):
+        """Create a mock LLMBackend that returns the given text."""
+        backend = MagicMock()
+        backend.chat.return_value = response_text
+        return backend
 
-        mock_response = MagicMock()
-        mock_response.message.content = (
+    def test_score_relevance(self):
+        backend = self._make_mock_backend(
             '{"relevance_score": 0.85, "reasoning": "Good match", '
             '"detected_topics": ["gaming"], "is_relevant": true}'
         )
-        mock_ollama.chat.return_value = mock_response
 
         from app.discovery.llm_scorer import LLMScorer
 
-        scorer = LLMScorer(model="qwen2.5:7b")
+        scorer = LLMScorer(backend=backend)
         result = scorer.score_relevance("gaming", _make_candidate())
 
         assert result is not None
         assert result.relevance_score == 0.85
         assert result.is_relevant is True
 
-    @patch("app.discovery.llm_scorer.ollama")
-    def test_score_relevance_error_returns_none(self, mock_ollama):
-        mock_ollama.list.return_value = MagicMock(
-            models=[MagicMock(model="qwen2.5:7b")]
+    def test_translate_title(self):
+        backend = self._make_mock_backend(
+            '{"chinese_title": "10个你不知道的Python技巧"}'
         )
-        mock_ollama.chat.side_effect = Exception("Connection refused")
 
         from app.discovery.llm_scorer import LLMScorer
 
-        scorer = LLMScorer(model="qwen2.5:7b")
+        scorer = LLMScorer(backend=backend)
+        result = scorer.translate_title("10 Python Tips You Didn't Know")
+
+        assert result is not None
+        assert "Python" in result.chinese_title
+
+    def test_translate_title_error_returns_none(self):
+        backend = MagicMock()
+        backend.chat.side_effect = Exception("Connection refused")
+
+        from app.discovery.llm_scorer import LLMScorer
+
+        scorer = LLMScorer(backend=backend)
+        result = scorer.translate_title("Some Title")
+
+        assert result is None
+
+    def test_score_relevance_error_returns_none(self):
+        backend = MagicMock()
+        backend.chat.side_effect = Exception("Connection refused")
+
+        from app.discovery.llm_scorer import LLMScorer
+
+        scorer = LLMScorer(backend=backend)
         result = scorer.score_relevance("test", _make_candidate())
 
         assert result is None
+
+    def test_evaluate_candidate(self):
+        response = (
+            '{"predicted_log_views": 10.5, "predicted_views": 36000, '
+            '"confidence": 0.8, "label": "successful", '
+            '"reasoning": "Strong transport candidate"}'
+        )
+        backend = self._make_mock_backend(response)
+
+        from app.discovery.llm_scorer import LLMScorer
+
+        scorer = LLMScorer(backend=backend)
+        result = scorer.evaluate_candidate(
+            candidate=_make_candidate(),
+            nn_prediction=10.0,
+            vectorstore_examples=[
+                {"log_views": 9.8, "similarity": 0.85, "rank": 1, "bvid": "BV123"},
+            ],
+            novelty_info={"novelty_score": 0.7, "similar_count": 3, "top_similar": []},
+        )
+
+        assert result is not None
+        assert result.label == "successful"
+        assert result.confidence == 0.8
+
+    def test_evaluate_candidate_error_returns_none(self):
+        backend = MagicMock()
+        backend.chat.side_effect = Exception("LLM offline")
+
+        from app.discovery.llm_scorer import LLMScorer
+
+        scorer = LLMScorer(backend=backend)
+        result = scorer.evaluate_candidate(
+            candidate=_make_candidate(),
+            nn_prediction=None,
+            vectorstore_examples=[],
+            novelty_info={"novelty_score": 1.0, "similar_count": 0, "top_similar": []},
+        )
+
+        assert result is None
+
+
+# ── Strategy Tests ───────────────────────────────────────────────────
+
+
+class TestStrategies:
+    def test_strategies_exist(self):
+        from app.discovery.strategies import TRANSPORT_STRATEGIES
+        assert len(TRANSPORT_STRATEGIES) == 8
+        assert TRANSPORT_STRATEGIES[0].name == "foreign_appreciation"
+
+    @pytest.mark.asyncio
+    async def test_check_strategy_saturation(self):
+        from app.discovery.strategies import TransportStrategy, check_strategy_saturation
+        from app.web_rag.bilibili_search import BilibiliSearchResult
+
+        strategy = TransportStrategy(
+            name="test", description="test",
+            example_queries=["test"], bilibili_check="test",
+        )
+
+        async def mock_search(query, max_results):
+            return [
+                BilibiliSearchResult("BV1", "t1", "a1", 50000, 1000, 100, 300),
+                BilibiliSearchResult("BV2", "t2", "a2", 20000, 500, 50, 200),
+                BilibiliSearchResult("BV3", "t3", "a3", 5000, 100, 10, 100),
+            ]
+
+        score = await check_strategy_saturation(strategy, mock_search)
+        assert score == 0.2  # 2 above 10K / threshold of 10
+
+    def test_get_unsaturated(self):
+        from app.discovery.strategies import TransportStrategy, get_unsaturated_strategies
+
+        strategies = [
+            TransportStrategy("a", "d", ["q"], "c", saturation_score=0.5),
+            TransportStrategy("b", "d", ["q"], "c", saturation_score=2.0),
+            TransportStrategy("c", "d", ["q"], "c", saturation_score=0.1),
+        ]
+
+        result = get_unsaturated_strategies(strategies, max_saturation=1.5)
+        assert len(result) == 2
+        assert result[0].name == "c"  # lowest first
+        assert result[1].name == "a"
+
+
+# ── Topic Generator Tests ───────────────────────────────────────────
+
+
+class TestTopicGenerator:
+    def test_generate_queries(self):
+        from app.discovery.topic_generator import TopicGenerator
+        from app.discovery.strategies import TransportStrategy
+
+        response = (
+            '{"queries": [{"query": "test query", "strategy_name": "test", '
+            '"bilibili_check": "测试", "reasoning": "good"}]}'
+        )
+        backend = MagicMock()
+        backend.chat.return_value = response
+
+        generator = TopicGenerator(backend=backend)
+        strategies = [TransportStrategy("test", "desc", ["ex"], "check")]
+
+        queries = generator.generate_queries(
+            strategies=strategies,
+            hot_words=[{"keyword": "热搜", "heat_score": 100000}],
+            past_successes=[{"title": "Past Video", "views": 50000}],
+        )
+
+        assert len(queries) == 1
+        assert queries[0].query == "test query"
+
+    def test_generate_queries_error(self):
+        from app.discovery.topic_generator import TopicGenerator
+
+        backend = MagicMock()
+        backend.chat.side_effect = Exception("LLM offline")
+
+        generator = TopicGenerator(backend=backend)
+        queries = generator.generate_queries([], [], [])
+
+        assert queries == []
 
 
 # ── Pipeline Tests ────────────────────────────────────────────────────
 
 
 class TestPipelineCombinedScore:
+    def _make_pipeline(self):
+        """Create a pipeline with a mock backend."""
+        from app.discovery.pipeline import DiscoveryPipeline
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        db = Database(db_path)
+        db.connect()
+
+        mock_backend = MagicMock()
+        with patch("app.discovery.pipeline.create_backend", return_value=mock_backend):
+            pipeline = DiscoveryPipeline(db, model_dir="nonexistent")
+
+        return pipeline, db, db_path
+
     def test_compute_combined_score_basic(self):
-        from app.discovery.pipeline import DiscoveryPipeline
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        db = Database(db_path)
-        db.connect()
-
-        with patch("app.discovery.llm_scorer.ollama") as mock_ollama:
-            mock_ollama.list.return_value = MagicMock(
-                models=[MagicMock(model="qwen2.5:7b")]
-            )
-            pipeline = DiscoveryPipeline(db, model_dir="nonexistent")
+        pipeline, db, db_path = self._make_pipeline()
 
         score = pipeline._compute_combined_score(
-            heat_score=1_000_000,
-            relevance=0.8,
             predicted_views=50000.0,
+            novelty_score=0.8,
+            confidence=0.9,
         )
 
         assert 0.0 <= score <= 1.0
-        assert score > 0.5  # Should be reasonably high with these inputs
-
-        db.close()
-        os.unlink(db_path)
-
-    def test_compute_combined_score_no_prediction(self):
-        from app.discovery.pipeline import DiscoveryPipeline
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        db = Database(db_path)
-        db.connect()
-
-        with patch("app.discovery.llm_scorer.ollama") as mock_ollama:
-            mock_ollama.list.return_value = MagicMock(
-                models=[MagicMock(model="qwen2.5:7b")]
-            )
-            pipeline = DiscoveryPipeline(db, model_dir="nonexistent")
-
-        score = pipeline._compute_combined_score(
-            heat_score=500000,
-            relevance=0.7,
-            predicted_views=None,
-        )
-
-        assert 0.0 <= score <= 1.0
-        # With no prediction, views_weight uses neutral 0.5
         assert score > 0.3
 
         db.close()
         os.unlink(db_path)
 
-    def test_compute_combined_score_zero_heat(self):
-        from app.discovery.pipeline import DiscoveryPipeline
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        db = Database(db_path)
-        db.connect()
-
-        with patch("app.discovery.llm_scorer.ollama") as mock_ollama:
-            mock_ollama.list.return_value = MagicMock(
-                models=[MagicMock(model="qwen2.5:7b")]
-            )
-            pipeline = DiscoveryPipeline(db, model_dir="nonexistent")
+    def test_compute_combined_score_no_prediction(self):
+        pipeline, db, db_path = self._make_pipeline()
 
         score = pipeline._compute_combined_score(
-            heat_score=0,
-            relevance=0.9,
-            predicted_views=100000.0,
+            predicted_views=None,
+            novelty_score=0.5,
+            confidence=0.7,
         )
 
         assert 0.0 <= score <= 1.0
+        assert score > 0.05
+
+        db.close()
+        os.unlink(db_path)
+
+    def test_compute_combined_score_high_novelty(self):
+        pipeline, db, db_path = self._make_pipeline()
+
+        score_high = pipeline._compute_combined_score(
+            predicted_views=100000.0,
+            novelty_score=1.0,
+            confidence=0.9,
+        )
+        score_low = pipeline._compute_combined_score(
+            predicted_views=100000.0,
+            novelty_score=0.1,
+            confidence=0.9,
+        )
+
+        # Higher novelty = higher score
+        assert score_high > score_low
 
         db.close()
         os.unlink(db_path)

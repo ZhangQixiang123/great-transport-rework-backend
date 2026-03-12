@@ -82,9 +82,19 @@ ADDITIONAL_FEATURES = [
 # Title embedding features (PCA-reduced sentence-transformer)
 EMBEDDING_FEATURES = [f"title_emb_{i}" for i in range(N_EMBEDDING_DIMS)]
 
-# Full feature set: 10 + 3 + 7 + 3 + 20 = 43 features
+# RAG features (from similar-video retrieval via VectorStore)
+RAG_FEATURES = [
+    "rag_similar_median_log_views",
+    "rag_similar_mean_log_views",
+    "rag_similar_std_log_views",
+    "rag_similar_max_log_views",
+    "rag_top5_mean_log_views",
+]
+
+# Full feature set: 10 + 3 + 7 + 3 + 20 + 5 = 48 features
 FEATURE_NAMES = (PRE_UPLOAD_FEATURES + CLICKBAIT_FEATURES
-                 + YOUTUBE_FEATURES + ADDITIONAL_FEATURES + EMBEDDING_FEATURES)
+                 + YOUTUBE_FEATURES + ADDITIONAL_FEATURES
+                 + EMBEDDING_FEATURES + RAG_FEATURES)
 
 # Legacy: keep old classification features for backward compat with tests
 LEGACY_FEATURE_NAMES = [
@@ -151,6 +161,7 @@ def extract_features_single(
     yt_stats: Optional[Dict] = None,
     yt_imputed: bool = False,
     title_embedding: Optional[np.ndarray] = None,
+    rag_features: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """Extract feature dictionary from a single CompetitorVideo.
 
@@ -159,6 +170,7 @@ def extract_features_single(
         yt_stats: Optional YouTube stats dict with keys like yt_views, yt_likes, etc.
         yt_imputed: Whether the YT stats are imputed (True) or real (False).
         title_embedding: Optional PCA-reduced title embedding array (N_EMBEDDING_DIMS,).
+        rag_features: Optional dict of RAG feature values from VectorStore.query().
     """
     duration = max(video.duration, 0)
     publish_hour = video.publish_time.hour if video.publish_time else 12
@@ -243,6 +255,14 @@ def extract_features_single(
         for i in range(N_EMBEDDING_DIMS):
             features[f"title_emb_{i}"] = 0.0
 
+    # RAG features (from similar-video retrieval)
+    if rag_features:
+        for feat in RAG_FEATURES:
+            features[feat] = float(rag_features.get(feat, 0.0))
+    else:
+        for feat in RAG_FEATURES:
+            features[feat] = 0.0
+
     return features
 
 
@@ -266,6 +286,7 @@ def extract_features_dataframe(
     yt_stats_map: Optional[Dict[str, Dict]] = None,
     yt_imputation_stats: Optional[Dict] = None,
     embedding_map: Optional[Dict[str, np.ndarray]] = None,
+    rag_features_list: Optional[List[Dict[str, float]]] = None,
 ) -> pd.DataFrame:
     """Extract features from a list of CompetitorVideo into a DataFrame.
 
@@ -274,9 +295,10 @@ def extract_features_dataframe(
         yt_stats_map: Optional mapping of bvid -> youtube stats dict.
         yt_imputation_stats: Optional imputation stats for missing YT data.
         embedding_map: Optional mapping of bvid -> title embedding array.
+        rag_features_list: Optional list of RAG feature dicts, one per video.
     """
     rows = []
-    for v in videos:
+    for i, v in enumerate(videos):
         # Determine YouTube stats (real or imputed)
         yt = yt_stats_map.get(v.bvid) if yt_stats_map else None
         yt_imputed = False
@@ -290,9 +312,11 @@ def extract_features_dataframe(
                 yt_imputed = True
 
         emb = embedding_map.get(v.bvid) if embedding_map else None
+        rag = rag_features_list[i] if rag_features_list else None
 
         rows.append(extract_features_single(
             v, yt_stats=yt, yt_imputed=yt_imputed, title_embedding=emb,
+            rag_features=rag,
         ))
     df = pd.DataFrame(rows, columns=FEATURE_NAMES)
     return df

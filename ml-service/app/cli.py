@@ -15,11 +15,14 @@ Usage:
     python -m app.cli discover --db-path /path/to/db.sqlite
     python -m app.cli discover-trending --db-path /path/to/db.sqlite
     python -m app.cli discover-history --db-path /path/to/db.sqlite
+    python -m app.cli train-predictor --db-path /path/to/db.sqlite
+    python -m app.cli fine-tune --db-path /path/to/db.sqlite
 """
 import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 
@@ -197,12 +200,17 @@ def parse_args():
         action="store_true",
         help="Force CPU training"
     )
+    train_parser.add_argument(
+        "--no-random-intercepts",
+        action="store_true",
+        help="Use pure LightGBM (no per-channel random intercepts, better for unseen channels)"
+    )
 
     # Discovery pipeline commands
 
     discover_parser = subparsers.add_parser(
         "discover",
-        help="Run the hot words discovery pipeline"
+        help="Run the strategy-driven discovery pipeline"
     )
     discover_parser.add_argument(
         "--max-keywords",
@@ -224,7 +232,7 @@ def parse_args():
     discover_parser.add_argument(
         "--llm-model",
         default="qwen2.5:7b",
-        help="Ollama model for relevance scoring (default: qwen2.5:7b)"
+        help="Ollama model for scoring (default: qwen2.5:7b)"
     )
     discover_parser.add_argument(
         "--max-age-days",
@@ -232,10 +240,117 @@ def parse_args():
         default=30,
         help="Only consider YouTube videos published within N days (default: 30, 0=no limit)"
     )
+    discover_parser.add_argument(
+        "--backend",
+        default="ollama",
+        choices=["ollama", "openai", "anthropic"],
+        help="LLM backend for scoring and prediction (default: ollama)"
+    )
 
     discover_trending_parser = subparsers.add_parser(
         "discover-trending",
         help="Fetch and display current Bilibili trending keywords"
+    )
+
+    # Fine-tune embeddings command
+    finetune_parser = subparsers.add_parser(
+        "fine-tune-embeddings",
+        help="Fine-tune title embedder and build RAG vector store"
+    )
+    finetune_parser.add_argument(
+        "--model-dir",
+        default="models",
+        help="Directory to save embedder and vector store (default: models)"
+    )
+    finetune_parser.add_argument(
+        "--epochs",
+        type=int,
+        default=30,
+        help="Max training epochs (default: 30)"
+    )
+    finetune_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size (default: 64)"
+    )
+    finetune_parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=1e-3,
+        help="Learning rate (default: 1e-3)"
+    )
+    finetune_parser.add_argument(
+        "--projection-dim",
+        type=int,
+        default=128,
+        help="Embedding projection dimension (default: 128)"
+    )
+    finetune_parser.add_argument(
+        "--full-finetune",
+        action="store_true",
+        help="Unfreeze transformer backbone (default: frozen)"
+    )
+    finetune_parser.add_argument(
+        "--backbone-lr",
+        type=float,
+        default=2e-5,
+        help="Backbone learning rate for full fine-tune (default: 2e-5)"
+    )
+    finetune_parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Early stopping patience (default: 5)"
+    )
+
+    # Train neural predictor command
+    predictor_parser = subparsers.add_parser(
+        "train-predictor",
+        help="Train the PyTorch neural predictor model"
+    )
+    predictor_parser.add_argument(
+        "--model-dir", default="models",
+        help="Directory with embedder/vector store and to save predictor (default: models)"
+    )
+    predictor_parser.add_argument(
+        "--epochs", type=int, default=50,
+        help="Max training epochs (default: 50)"
+    )
+    predictor_parser.add_argument(
+        "--batch-size", type=int, default=256,
+        help="Batch size (default: 256)"
+    )
+    predictor_parser.add_argument(
+        "--learning-rate", type=float, default=1e-3,
+        help="Learning rate (default: 1e-3)"
+    )
+    predictor_parser.add_argument(
+        "--patience", type=int, default=8,
+        help="Early stopping patience (default: 8)"
+    )
+
+    # Predict command
+    predict_parser = subparsers.add_parser(
+        "predict",
+        help="Test prediction on a single YouTube video URL or ID"
+    )
+    predict_parser.add_argument(
+        "video",
+        help="YouTube video URL or video ID"
+    )
+    predict_parser.add_argument(
+        "--model-dir", default="models",
+        help="Directory with trained models (default: models)"
+    )
+    predict_parser.add_argument(
+        "--backend", default="ollama",
+        choices=["ollama", "openai", "anthropic"],
+        help="LLM backend for prediction (default: ollama)"
+    )
+    predict_parser.add_argument(
+        "--llm-model", default="qwen2.5:7b",
+        help="LLM model name (default: qwen2.5:7b)"
     )
 
     discover_history_parser = subparsers.add_parser(
@@ -247,6 +362,36 @@ def parse_args():
         type=int,
         default=5,
         help="Number of recent runs to show (default: 5)"
+    )
+
+    # Fine-tune LLM command (LoRA)
+    ft_llm_parser = subparsers.add_parser(
+        "fine-tune",
+        help="Fine-tune Qwen 2.5 7B with LoRA on transport data"
+    )
+    ft_llm_parser.add_argument(
+        "--model-dir", default="models",
+        help="Directory with data and to save artifacts (default: models)"
+    )
+    ft_llm_parser.add_argument(
+        "--base-model", default="Qwen/Qwen2.5-7B",
+        help="HuggingFace base model (default: Qwen/Qwen2.5-7B)"
+    )
+    ft_llm_parser.add_argument(
+        "--output-dir", default="models/finetuned",
+        help="Directory for fine-tuned model output (default: models/finetuned)"
+    )
+    ft_llm_parser.add_argument(
+        "--ollama-name", default="transport-qwen",
+        help="Ollama model name (default: transport-qwen)"
+    )
+    ft_llm_parser.add_argument(
+        "--prepare-only", action="store_true",
+        help="Only prepare training data, don't train"
+    )
+    ft_llm_parser.add_argument(
+        "--export-only", action="store_true",
+        help="Only export existing adapter to Ollama"
     )
 
     return parser.parse_args()
@@ -416,38 +561,37 @@ def cmd_train(db: Database, args) -> dict:
     elif args.no_gpu:
         use_gpu = False
 
-    model, report, validation = train_model(
+    use_ri = not args.no_random_intercepts
+
+    model, report, metadata = train_model(
         db,
         model_dir=args.model_dir,
-        test_size=args.test_size,
         num_rounds=args.num_rounds,
         learning_rate=args.learning_rate,
         min_samples=args.min_samples,
-        use_gpu=use_gpu,
+        use_random_intercepts=use_ri,
     )
 
-    result = {
-        "command": "train",
-        "validation": {
-            "is_valid": validation.is_valid,
-            "total_samples": validation.total_samples,
-            "class_distribution": validation.class_distribution,
-            "warnings": validation.warnings,
-            "errors": validation.errors,
-        },
-    }
+    result = {"command": "train"}
 
     if model and report:
         result["success"] = True
         result["evaluation"] = {
-            "accuracy": round(report.accuracy, 4),
-            "weighted_f1": round(report.weighted_f1, 4),
-            "macro_f1": round(report.macro_f1, 4),
-            "logloss": round(report.logloss, 4),
+            "rmse": round(report.rmse, 4),
+            "r2": round(report.r2, 4),
+            "mae": round(report.mae, 4),
+            "correlation": round(report.correlation, 4),
         }
         result["model_dir"] = args.model_dir
+        result["metadata"] = {
+            "training_samples": metadata.get("training_samples"),
+            "unique_channels": metadata.get("unique_channels"),
+            "cv_mean_r2": metadata.get("cv_evaluation", {}).get("mean_r2"),
+            "cv_mean_correlation": metadata.get("cv_evaluation", {}).get("mean_correlation"),
+        }
     else:
         result["success"] = False
+        result["error"] = metadata.get("error", "Training failed")
 
     return result
 
@@ -460,6 +604,7 @@ async def cmd_discover(db: Database, args) -> dict:
 
     pipeline = DiscoveryPipeline(
         db, model_dir=args.model_dir, llm_model=args.llm_model,
+        backend_type=getattr(args, "backend", "ollama"),
     )
     recommendations = await pipeline.run(
         max_keywords=args.max_keywords,
@@ -472,15 +617,16 @@ async def cmd_discover(db: Database, args) -> dict:
         "total_recommendations": len(recommendations),
         "recommendations": [
             {
-                "keyword": r.keyword,
-                "heat_score": r.heat_score,
+                "strategy": r.strategy,
+                "query_used": r.query_used,
                 "youtube_video_id": r.youtube_video_id,
                 "youtube_title": r.youtube_title,
                 "youtube_channel": r.youtube_channel,
                 "youtube_views": r.youtube_views,
-                "relevance_score": round(r.relevance_score, 3),
+                "novelty_score": round(r.novelty_score, 3),
                 "predicted_views": round(r.predicted_views, 0) if r.predicted_views else None,
                 "predicted_label": r.predicted_label,
+                "confidence": round(r.confidence, 3),
                 "combined_score": round(r.combined_score, 4),
             }
             for r in recommendations
@@ -515,6 +661,245 @@ def cmd_discover_history(db: Database, args) -> dict:
         "command": "discover-history",
         "runs": history,
     }
+
+
+def cmd_fine_tune_embeddings(db: Database, args) -> dict:
+    """Execute the fine-tune-embeddings command."""
+    from .embeddings.trainer import fine_tune_embeddings
+
+    db.ensure_competitor_tables()
+
+    embedder, metrics = fine_tune_embeddings(
+        db,
+        model_dir=args.model_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.learning_rate,
+        patience=args.patience,
+        freeze_backbone=not args.full_finetune,
+        projection_dim=args.projection_dim,
+        backbone_lr=args.backbone_lr,
+    )
+
+    result = {"command": "fine-tune-embeddings"}
+    if embedder is not None and metrics is not None:
+        result["success"] = True
+        result["metrics"] = metrics
+    else:
+        result["success"] = False
+        result["error"] = "Insufficient data or training failed"
+
+    return result
+
+
+def cmd_train_predictor(db: Database, args) -> dict:
+    """Execute the train-predictor command."""
+    from .prediction.trainer import train_predictor
+
+    db.ensure_competitor_tables()
+
+    model, metrics = train_predictor(
+        db,
+        model_dir=args.model_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.learning_rate,
+        patience=args.patience,
+    )
+
+    result = {"command": "train-predictor"}
+    if model is not None and metrics is not None:
+        result["success"] = True
+        result["metrics"] = metrics
+    else:
+        result["success"] = False
+        result["error"] = "Training failed — insufficient data or error"
+
+    return result
+
+
+def cmd_fine_tune(db: Database, args) -> dict:
+    """Execute the fine-tune command (LoRA on Qwen 2.5 7B)."""
+    from .finetuning.prepare_data import prepare_training_data
+
+    db.ensure_competitor_tables()
+
+    result = {"command": "fine-tune"}
+
+    # Step 1: Prepare data
+    try:
+        train_path, val_path, stats = prepare_training_data(
+            db, model_dir=args.model_dir,
+        )
+        result["data_stats"] = stats
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Data preparation failed: {e}"
+        return result
+
+    if args.prepare_only:
+        result["success"] = True
+        result["phase"] = "data_prepared"
+        return result
+
+    if args.export_only:
+        # Skip training, just export
+        adapter_path = os.path.join(args.output_dir, "lora_adapter")
+        if not os.path.exists(adapter_path):
+            result["success"] = False
+            result["error"] = f"No adapter found at {adapter_path}"
+            return result
+
+        from .finetuning.export_model import export_full_pipeline
+        try:
+            export_result = export_full_pipeline(
+                adapter_path=adapter_path,
+                base_model=args.base_model,
+                output_dir=args.output_dir,
+                model_name=args.ollama_name,
+            )
+            result["success"] = export_result["success"]
+            result["export"] = export_result
+        except Exception as e:
+            result["success"] = False
+            result["error"] = f"Export failed: {e}"
+        return result
+
+    # Step 2: Train LoRA
+    try:
+        from .finetuning.train_lora import train_lora
+        train_result = train_lora(
+            train_path=train_path,
+            val_path=val_path,
+            output_dir=args.output_dir,
+            base_model=args.base_model,
+        )
+        result["training"] = train_result
+    except ImportError as e:
+        result["success"] = False
+        result["error"] = f"Missing dependencies: {e}"
+        return result
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Training failed: {e}"
+        return result
+
+    # Step 3: Export to Ollama
+    try:
+        from .finetuning.export_model import export_full_pipeline
+        export_result = export_full_pipeline(
+            adapter_path=train_result["adapter_path"],
+            base_model=args.base_model,
+            output_dir=args.output_dir,
+            model_name=args.ollama_name,
+        )
+        result["export"] = export_result
+        result["success"] = export_result["success"]
+    except Exception as e:
+        result["success"] = True  # Training succeeded even if export failed
+        result["export_error"] = str(e)
+        logger.warning("Export to Ollama failed (training succeeded): %s", e)
+
+    return result
+
+
+async def cmd_predict(db: Database, args) -> dict:
+    """Execute the predict command — single video prediction."""
+    import math
+    import re
+
+    # Parse video ID from URL or raw ID
+    video_input = args.video
+    match = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", video_input)
+    video_id = match.group(1) if match else video_input
+
+    # Fetch video info from YouTube
+    import httpx
+    api_key = os.environ.get("YOUTUBE_API_KEY", "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U")
+    client = httpx.Client()
+    try:
+        resp = client.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            params={
+                "part": "snippet,statistics,contentDetails",
+                "id": video_id,
+                "key": api_key,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+    finally:
+        client.close()
+
+    if not items:
+        return {"command": "predict", "error": f"Video not found: {video_id}"}
+
+    item = items[0]
+    snippet = item.get("snippet", {})
+    stats = item.get("statistics", {})
+    content = item.get("contentDetails", {})
+
+    title = snippet.get("title", "")
+    channel = snippet.get("channelTitle", "")
+    yt_views = int(stats.get("viewCount", 0))
+    yt_likes = int(stats.get("likeCount", 0))
+    yt_comments = int(stats.get("commentCount", 0))
+    category_id = int(snippet.get("categoryId", 0))
+
+    # Parse duration
+    dur_str = content.get("duration", "")
+    dur_match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", dur_str or "")
+    duration = 0
+    if dur_match:
+        duration = (int(dur_match.group(1) or 0) * 3600
+                    + int(dur_match.group(2) or 0) * 60
+                    + int(dur_match.group(3) or 0))
+
+    result = {
+        "command": "predict",
+        "video_id": video_id,
+        "title": title,
+        "channel": channel,
+        "yt_views": yt_views,
+        "predictions": {},
+    }
+
+    # LLM prediction with evidence context
+    try:
+        from .prediction.llm_predictor import LLMPredictor
+        predictor = LLMPredictor(
+            backend_type=args.backend, model=args.llm_model,
+        )
+        llm_pred = predictor.predict(
+            title=title, channel=channel, yt_views=yt_views,
+            yt_likes=yt_likes, yt_comments=yt_comments,
+            duration_seconds=duration, category_id=category_id,
+        )
+        if llm_pred:
+            result["predictions"]["llm"] = {
+                "log_views": round(llm_pred["predicted_log_views"], 3),
+                "views": llm_pred["predicted_views"],
+                "confidence": round(llm_pred["confidence"], 3),
+                "label": llm_pred["label"],
+                "reasoning": llm_pred["reasoning"],
+            }
+    except Exception as e:
+        logger.warning("LLM prediction failed: %s", e)
+
+    # Neural predictor
+    predictor_path = os.path.join(args.model_dir, "predictor.pt")
+    if not os.path.exists(predictor_path):
+        predictor_path = os.path.join(args.model_dir, "reranker.pt")
+    if os.path.exists(predictor_path):
+        try:
+            from .prediction.neural_reranker import NeuralPredictor
+            nn_model = NeuralPredictor.load(predictor_path)
+            result["predictions"]["neural_predictor"] = {"available": True, "path": predictor_path}
+        except Exception as e:
+            logger.warning("Neural predictor load failed: %s", e)
+
+    return result
 
 
 def cmd_stats(db: Database, args) -> dict:
@@ -601,12 +986,20 @@ async def main():
             result = cmd_training_status(db, args)
         elif args.command == "train":
             result = cmd_train(db, args)
+        elif args.command == "fine-tune-embeddings":
+            result = cmd_fine_tune_embeddings(db, args)
+        elif args.command == "train-predictor":
+            result = cmd_train_predictor(db, args)
+        elif args.command == "predict":
+            result = await cmd_predict(db, args)
         elif args.command == "discover":
             result = await cmd_discover(db, args)
         elif args.command == "discover-trending":
             result = await cmd_discover_trending(db, args)
         elif args.command == "discover-history":
             result = cmd_discover_history(db, args)
+        elif args.command == "fine-tune":
+            result = cmd_fine_tune(db, args)
         else:
             logger.error(f"Unknown command: {args.command}")
             sys.exit(1)
@@ -699,27 +1092,73 @@ async def main():
             print(f"  unlabeled: {result.get('unlabeled', 0)}")
 
         elif args.command == "train":
-            v = result["validation"]
-            print(f"Data: {v['total_samples']} labeled samples")
-            if v["class_distribution"]:
-                for name, count in sorted(v["class_distribution"].items()):
-                    print(f"  {name}: {count}")
-            if v["errors"]:
-                print(f"\nTraining FAILED — data requirements not met:")
-                for e in v["errors"]:
-                    print(f"  - {e}")
-            if v["warnings"]:
-                print(f"\nWarnings:")
-                for w in v["warnings"]:
-                    print(f"  - {w}")
             if result.get("success"):
                 ev = result["evaluation"]
-                print(f"\nModel trained successfully!")
-                print(f"  Accuracy:    {ev['accuracy']}")
-                print(f"  Weighted F1: {ev['weighted_f1']}")
-                print(f"  Macro F1:    {ev['macro_f1']}")
-                print(f"  Log Loss:    {ev['logloss']}")
-                print(f"  Saved to:    {result['model_dir']}/")
+                m = result.get("metadata", {})
+                print(f"Model trained successfully!")
+                print(f"  Samples: {m.get('training_samples', '?')}, Channels: {m.get('unique_channels', '?')}")
+                print(f"\n  Train metrics:")
+                print(f"    RMSE:        {ev['rmse']}")
+                print(f"    R2:          {ev['r2']}")
+                print(f"    MAE:         {ev['mae']}")
+                print(f"    Correlation: {ev['correlation']}")
+                cv_r2 = m.get('cv_mean_r2')
+                cv_corr = m.get('cv_mean_correlation')
+                if cv_r2 is not None:
+                    print(f"\n  CV metrics (cross-channel):")
+                    print(f"    Mean R2:          {cv_r2:.4f}")
+                    print(f"    Mean Correlation: {cv_corr:.4f}")
+                print(f"\n  Saved to: {result['model_dir']}/")
+            else:
+                print(f"Training failed: {result.get('error', 'Unknown error')}")
+
+        elif args.command == "fine-tune-embeddings":
+            if result.get("success"):
+                m = result["metrics"]
+                print(f"Fine-tuning complete!")
+                print(f"  Best epoch: {m['best_epoch']}/{m['total_epochs']}")
+                print(f"  Best val loss: {m['best_val_loss']:.4f}")
+                print(f"  Videos: {m['num_videos']}, Channels: {m['num_channels']}")
+                print(f"  Projection dim: {m['projection_dim']}")
+                print(f"  Vector store: {m['vector_store_size']} entries")
+                print(f"  Device: {m['device']}")
+            else:
+                print(f"Fine-tuning failed: {result.get('error', 'Unknown error')}")
+
+        elif args.command == "train-predictor":
+            if result.get("success"):
+                m = result.get("metrics", {})
+                cv = m.get("cv_evaluation", {})
+                print(f"Neural predictor trained successfully!")
+                print(f"  Samples: {m.get('training_samples', '?')}, "
+                      f"Channels: {m.get('unique_channels', '?')}")
+                print(f"  Folds: {m.get('n_folds', '?')}, Epochs: {m.get('epochs', '?')}")
+                print(f"  Device: {m.get('device', '?')}")
+                if cv:
+                    print(f"\n  CV metrics:")
+                    print(f"    Mean R2:          {cv.get('mean_r2', 0):.4f}")
+                    print(f"    Mean Correlation: {cv.get('mean_correlation', 0):.4f}")
+                    print(f"    Mean RMSE:        {cv.get('mean_rmse', 0):.4f}")
+            else:
+                print(f"Training failed: {result.get('error', 'Unknown error')}")
+
+        elif args.command == "predict":
+            if result.get("error"):
+                print(f"Error: {result['error']}")
+            else:
+                print(f"Video: {result.get('title', '')[:60]}")
+                print(f"Channel: {result.get('channel', '')}")
+                print(f"YT Views: {result.get('yt_views', 0):,}")
+                preds = result.get("predictions", {})
+                if preds.get("llm"):
+                    llm = preds["llm"]
+                    print(f"\nLLM Prediction:")
+                    print(f"  Views: {llm['views']:,} (log={llm['log_views']})")
+                    print(f"  Label: {llm['label']}")
+                    print(f"  Confidence: {llm['confidence']}")
+                    print(f"  Reasoning: {llm['reasoning']}")
+                if preds.get("neural_predictor"):
+                    print(f"\nNeural predictor: available at {preds['neural_predictor'].get('path')}")
 
         elif args.command == "discover":
             print(f"Recommendations: {result['total_recommendations']}")
@@ -728,10 +1167,10 @@ async def main():
                 pv = rec.get("predicted_views")
                 pv_str = f"{pv:,.0f}" if pv else "n/a"
                 print(f"\n  #{i} [{rec['combined_score']:.4f}] {rec['youtube_title'][:60]}")
-                print(f"     Keyword: {rec['keyword']} (heat={rec['heat_score']:,})")
+                print(f"     Strategy: {rec['strategy']} | Query: {rec['query_used'][:40]}")
                 print(f"     Channel: {rec['youtube_channel']}")
-                print(f"     YT views: {rec['youtube_views']:,} | Relevance: {rec['relevance_score']:.2f}")
-                print(f"     Predicted: {pv_str} views ({label})")
+                print(f"     YT views: {rec['youtube_views']:,} | Novelty: {rec['novelty_score']:.2f}")
+                print(f"     Predicted: {pv_str} views ({label}) | Confidence: {rec['confidence']:.2f}")
 
         elif args.command == "discover-trending":
             print(f"Trending keywords: {result['count']}")
@@ -748,8 +1187,23 @@ async def main():
                       f"Candidates: {run['candidates_found']}, "
                       f"Recommendations: {run['recommendations_count']}")
                 for rec in run.get("top_recommendations", [])[:5]:
-                    print(f"    [{rec['combined_score']:.4f}] {rec['youtube_title'][:50]} "
-                          f"({rec['keyword']})")
+                    print(f"    [{rec['combined_score']:.4f}] {rec['youtube_title'][:50]}")
+
+        elif args.command == "fine-tune":
+            if result.get("success"):
+                print(f"Fine-tuning pipeline complete!")
+                stats = result.get("data_stats", {})
+                print(f"  Training examples: {stats.get('train_examples', '?')}")
+                print(f"  Validation examples: {stats.get('val_examples', '?')}")
+                if result.get("training"):
+                    t = result["training"]
+                    print(f"  Train loss: {t.get('train_loss', '?'):.4f}")
+                    print(f"  Eval loss: {t.get('eval_loss', '?'):.4f}")
+                if result.get("export"):
+                    e = result["export"]
+                    print(f"  Ollama model: {e.get('ollama_model', 'n/a')}")
+            else:
+                print(f"Fine-tuning failed: {result.get('error', 'Unknown error')}")
 
         print(f"{'=' * 50}\n")
 

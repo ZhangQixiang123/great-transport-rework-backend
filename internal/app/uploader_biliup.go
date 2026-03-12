@@ -18,6 +18,7 @@ type BiliupUploaderOptions struct {
 	CookiePath  string
 	Line        string
 	Limit       int
+	Title       string
 	TitlePrefix string
 	Description string
 	Dynamic     string
@@ -156,14 +157,19 @@ type biliupMetadata struct {
 }
 
 func (u *BiliupUploader) buildMetadata(path string) biliupMetadata {
-	base := filepath.Base(path)
-	name := strings.TrimSuffix(base, filepath.Ext(base))
-	if strings.TrimSpace(name) == "" {
-		name = base
-	}
-	title := strings.TrimSpace(u.opts.TitlePrefix + name)
-	if title == "" {
-		title = name
+	var title string
+	if u.opts.Title != "" {
+		title = u.opts.Title
+	} else {
+		base := filepath.Base(path)
+		name := strings.TrimSuffix(base, filepath.Ext(base))
+		if strings.TrimSpace(name) == "" {
+			name = base
+		}
+		title = strings.TrimSpace(u.opts.TitlePrefix + name)
+		if title == "" {
+			title = name
+		}
 	}
 
 	desc := strings.TrimSpace(u.opts.Description)

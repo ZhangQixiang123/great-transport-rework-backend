@@ -1,0 +1,413 @@
+{
+  "timestamp": "20260308_200512",
+  "model_type": "gpboost_mixed_effects",
+  "model_path": "models\\model_20260308_200512.json",
+  "num_features": 48,
+  "feature_names": [
+    "duration",
+    "duration_bucket",
+    "title_length",
+    "title_has_number",
+    "description_length",
+    "publish_hour_sin",
+    "publish_hour_cos",
+    "publish_dow_sin",
+    "publish_dow_cos",
+    "has_youtube_source",
+    "title_exclamation_count",
+    "title_question_count",
+    "title_caps_ratio",
+    "yt_log_views",
+    "yt_log_likes",
+    "yt_log_comments",
+    "yt_duration_seconds",
+    "yt_like_view_ratio",
+    "yt_comment_view_ratio",
+    "yt_category_id",
+    "yt_tag_count",
+    "yt_upload_delay_days",
+    "yt_stats_imputed",
+    "title_emb_0",
+    "title_emb_1",
+    "title_emb_2",
+    "title_emb_3",
+    "title_emb_4",
+    "title_emb_5",
+    "title_emb_6",
+    "title_emb_7",
+    "title_emb_8",
+    "title_emb_9",
+    "title_emb_10",
+    "title_emb_11",
+    "title_emb_12",
+    "title_emb_13",
+    "title_emb_14",
+    "title_emb_15",
+    "title_emb_16",
+    "title_emb_17",
+    "title_emb_18",
+    "title_emb_19",
+    "rag_similar_median_log_views",
+    "rag_similar_mean_log_views",
+    "rag_similar_std_log_views",
+    "rag_similar_max_log_views",
+    "rag_top5_mean_log_views"
+  ],
+  "use_random_intercepts": true,
+  "label_map": {
+    "failed": 0,
+    "standard": 1,
+    "successful": 2,
+    "viral": 3
+  },
+  "percentile_thresholds": {
+    "p25": 5.998815838982146,
+    "p75": 8.694948991164102,
+    "p95": 11.206057716539533
+  },
+  "yt_imputation_stats": {
+    "per_channel": {
+      "6856883": {
+        "yt_views": 3863491.914893617,
+        "yt_likes": 83625.56382978724,
+        "yt_comments": 14926.18085106383,
+        "yt_duration_seconds": 1454.8900709219859,
+        "yt_category_id": 20.141843971631207,
+        "yt_tag_count": 31.638297872340427
+      },
+      "23534705": {
+        "yt_views": 4002621.140893471,
+        "yt_likes": 75921.50859106529,
+        "yt_comments": 3709.9415807560135,
+        "yt_duration_seconds": 388.3127147766323,
+        "yt_category_id": 26.824742268041238,
+        "yt_tag_count": 17.539518900343644
+      },
+      "13170390": {
+        "yt_views": 946646.2469135802,
+        "yt_likes": 24621.880658436214,
+        "yt_comments": 4207.469135802469,
+        "yt_duration_seconds": 1985.7777777777778,
+        "yt_category_id": 25.246913580246915,
+        "yt_tag_count": 11.131687242798353
+      },
+      "3773620": {
+        "yt_views": 10219873.935742972,
+        "yt_likes": 542309.124497992,
+        "yt_comments": 41262.76706827309,
+        "yt_duration_seconds": 1046.8032128514055,
+        "yt_category_id": 22.485943775100402,
+        "yt_tag_count": 6.469879518072289
+      },
+      "10523655": {
+        "yt_views": 5754121.2727272725,
+        "yt_likes": 198483.84848484848,
+        "yt_comments": 15374.212121212122,
+        "yt_duration_seconds": 512.2424242424242,
+        "yt_category_id": 20.696969696969695,
+        "yt_tag_count": 14.181818181818182
+      },
+      "65410812": {
+        "yt_views": 3119973.736842105,
+        "yt_likes": 71684.82105263158,
+        "yt_comments": 3322.5789473684213,
+        "yt_duration_seconds": 237.93684210526317,
+        "yt_category_id": 21.726315789473684,
+        "yt_tag_count": 6.4
+      },
+      "816198": {
+        "yt_views": 2566461.173267327,
+        "yt_likes": 94595.9504950495,
+        "yt_comments": 5533.183168316832,
+        "yt_duration_seconds": 1381.8217821782177,
+        "yt_category_id": 20.257425742574256,
+        "yt_tag_count": 11.217821782178218
+      },
+      "33708661": {
+        "yt_views": 4318146.165898617,
+        "yt_likes": 55085.39170506912,
+        "yt_comments": 2707.6405529953918,
+        "yt_duration_seconds": 814.815668202765,
+        "yt_category_id": 21.852534562211982,
+        "yt_tag_count": 18.91705069124424
+      },
+      "21416270": {
+        "yt_views": 6496776.24789916,
+        "yt_likes": 171915.79831932773,
+        "yt_comments": 11408.327731092437,
+        "yt_duration_seconds": 383.4201680672269,
+        "yt_category_id": 26.10924369747899,
+        "yt_tag_count": 24.176470588235293
+      },
+      "520908683": {
+        "yt_views": 1614833.799019608,
+        "yt_likes": 40488.51960784314,
+        "yt_comments": 2291.3627450980393,
+        "yt_duration_seconds": 585.2843137254902,
+        "yt_category_id": 24.38235294117647,
+        "yt_tag_count": 21.102941176470587
+      },
+      "3457624": {
+        "yt_views": 572899.5654205608,
+        "yt_likes": 25519.532710280375,
+        "yt_comments": 932.7850467289719,
+        "yt_duration_seconds": 729.3411214953271,
+        "yt_category_id": 22.72897196261682,
+        "yt_tag_count": 16.2803738317757
+      },
+      "66795887": {
+        "yt_views": 625765.5275862069,
+        "yt_likes": 21003.844827586207,
+        "yt_comments": 783.7724137931034,
+        "yt_duration_seconds": 945.7931034482758,
+        "yt_category_id": 24.579310344827586,
+        "yt_tag_count": 20.631034482758622
+      },
+      "375797865": {
+        "yt_views": 4640.0,
+        "yt_likes": 117.0,
+        "yt_comments": 1.0,
+        "yt_duration_seconds": 368.0,
+        "yt_category_id": 17.0,
+        "yt_tag_count": 36.0
+      },
+      "4390568": {
+        "yt_views": 2205026.1845493563,
+        "yt_likes": 130968.84120171674,
+        "yt_comments": 5428.004291845494,
+        "yt_duration_seconds": 2463.824034334764,
+        "yt_category_id": 21.27038626609442,
+        "yt_tag_count": 12.184549356223176
+      },
+      "3461582812088629": {
+        "yt_views": 12109993.445652174,
+        "yt_likes": 386192.32608695654,
+        "yt_comments": 20211.619565217392,
+        "yt_duration_seconds": 684.304347826087,
+        "yt_category_id": 27.0,
+        "yt_tag_count": 12.206521739130435
+      },
+      "677245745": {
+        "yt_views": 4970.5,
+        "yt_likes": 118.0,
+        "yt_comments": 23.5,
+        "yt_duration_seconds": 3668.5,
+        "yt_category_id": 22.5,
+        "yt_tag_count": 8.5
+      },
+      "401400666": {
+        "yt_views": 2437270.6692913384,
+        "yt_likes": 56490.22440944882,
+        "yt_comments": 1954.8779527559054,
+        "yt_duration_seconds": 1016.1653543307086,
+        "yt_category_id": 26.511811023622048,
+        "yt_tag_count": 6.732283464566929
+      },
+      "40291327": {
+        "yt_views": 571460.4436090225,
+        "yt_likes": 7510.578947368421,
+        "yt_comments": 760.8195488721805,
+        "yt_duration_seconds": 569.4135338345865,
+        "yt_category_id": 20.142857142857142,
+        "yt_tag_count": 11.827067669172932
+      },
+      "475981121": {
+        "yt_views": 2621218.4149659863,
+        "yt_likes": 64249.47959183674,
+        "yt_comments": 3505.098639455782,
+        "yt_duration_seconds": 1193.9353741496598,
+        "yt_category_id": 26.42517006802721,
+        "yt_tag_count": 6.180272108843537
+      },
+      "153950464": {
+        "yt_views": 194724.4,
+        "yt_likes": 6408.266666666666,
+        "yt_comments": 831.3333333333334,
+        "yt_duration_seconds": 1890.8,
+        "yt_category_id": 22.466666666666665,
+        "yt_tag_count": 11.466666666666667
+      },
+      "121473911": {
+        "yt_views": 3345375.0883392226,
+        "yt_likes": 60670.03886925795,
+        "yt_comments": 1084.095406360424,
+        "yt_duration_seconds": 1026.720848056537,
+        "yt_category_id": 21.681978798586574,
+        "yt_tag_count": 11.696113074204947
+      },
+      "3546839982803255": {
+        "yt_views": 4135086.743243243,
+        "yt_likes": 49659.27027027027,
+        "yt_comments": 2135.4087837837837,
+        "yt_duration_seconds": 1115.712837837838,
+        "yt_category_id": 21.986486486486488,
+        "yt_tag_count": 16.04054054054054
+      },
+      "1263732318": {
+        "yt_views": 4253408.0,
+        "yt_likes": 103857.25,
+        "yt_comments": 7088.25,
+        "yt_duration_seconds": 987.75,
+        "yt_category_id": 22.0,
+        "yt_tag_count": 16.5
+      },
+      "6756999": {
+        "yt_views": 7610239.972881356,
+        "yt_likes": 222559.65762711863,
+        "yt_comments": 5717.620338983051,
+        "yt_duration_seconds": 761.7593220338983,
+        "yt_category_id": 22.128813559322033,
+        "yt_tag_count": 14.840677966101694
+      }
+    },
+    "global": {
+      "yt_views": 3754665.3135989318,
+      "yt_likes": 110552.29223236145,
+      "yt_comments": 6821.638993990652,
+      "yt_duration_seconds": 1029.8851546850656,
+      "yt_category_id": 23.357444914311152,
+      "yt_tag_count": 15.039394613843758
+    }
+  },
+  "params": {
+    "objective": "regression_l2",
+    "learning_rate": 0.05,
+    "num_leaves": 63,
+    "feature_fraction": 0.8,
+    "min_data_in_leaf": 20
+  },
+  "num_boost_round": 500,
+  "training_samples": 7743,
+  "samples_with_youtube": 4493,
+  "unique_channels": 31,
+  "cv_evaluation": {
+    "mean_rmse": 2.4184144917253994,
+    "mean_r2": -0.4997364273985185,
+    "mean_mae": 1.925381059350192,
+    "mean_correlation": 0.17012900673573056,
+    "mean_within_1_log": 0.33860282146398274,
+    "mean_within_2_log": 0.6131713310673621,
+    "n_folds": 5,
+    "per_fold": [
+      {
+        "rmse": 1.851629507823072,
+        "mae": 1.45112706244891,
+        "r2": -0.4140832909683636,
+        "correlation": 0.1176932717850987,
+        "within_1_log": 0.4270967741935484,
+        "within_2_log": 0.7419354838709677,
+        "fold": 0,
+        "train_size": 6193,
+        "test_size": 1550
+      },
+      {
+        "rmse": 2.658843720689972,
+        "mae": 2.0716314521461454,
+        "r2": -0.6453944325941687,
+        "correlation": 0.04655214482519156,
+        "within_1_log": 0.32335718932986335,
+        "within_2_log": 0.5797007156798959,
+        "fold": 1,
+        "train_size": 6206,
+        "test_size": 1537
+      },
+      {
+        "rmse": 2.4012375862329414,
+        "mae": 2.0013359338821846,
+        "r2": -0.27347932432498756,
+        "correlation": 0.30366734156701225,
+        "within_1_log": 0.2648401826484018,
+        "within_2_log": 0.5446836268754077,
+        "fold": 2,
+        "train_size": 6210,
+        "test_size": 1533
+      },
+      {
+        "rmse": 3.3011689718263466,
+        "mae": 2.6529018989470026,
+        "r2": -0.6852379741881538,
+        "correlation": 0.28839377608004724,
+        "within_1_log": 0.24572514249525015,
+        "within_2_log": 0.45471817606079795,
+        "fold": 3,
+        "train_size": 6164,
+        "test_size": 1579
+      },
+      {
+        "rmse": 1.879192672054665,
+        "mae": 1.449908949326717,
+        "r2": -0.48048711491691876,
+        "correlation": 0.09433849942130298,
+        "within_1_log": 0.4319948186528497,
+        "within_2_log": 0.7448186528497409,
+        "fold": 4,
+        "train_size": 6199,
+        "test_size": 1544
+      }
+    ]
+  },
+  "evaluation": {
+    "rmse": 0.1567362689687158,
+    "mae": 0.12525920009276312,
+    "median_ae": 0.10646759154817698,
+    "r2": 0.9952464989809305,
+    "correlation": 0.9976330239499073,
+    "within_1_log": 1.0,
+    "within_2_log": 1.0,
+    "test_samples": 7743,
+    "target_mean": 7.268859981653994,
+    "target_std": 2.2733311807425016,
+    "feature_importance": {
+      "duration": 212947.76504039764,
+      "duration_bucket": 10471.511798858643,
+      "title_length": 137092.37060832977,
+      "title_has_number": 9562.260551452637,
+      "description_length": 168065.52961540222,
+      "publish_hour_sin": 78147.88817834854,
+      "publish_hour_cos": 92961.1866106987,
+      "publish_dow_sin": 66473.75806713104,
+      "publish_dow_cos": 56853.255278110504,
+      "has_youtube_source": 6342.734411239624,
+      "title_exclamation_count": 8680.365099430084,
+      "title_question_count": 12031.951378822327,
+      "title_caps_ratio": 173917.05555963516,
+      "yt_log_views": 117056.35882377625,
+      "yt_log_likes": 130855.65004444122,
+      "yt_log_comments": 129024.33847761154,
+      "yt_duration_seconds": 137138.6683101654,
+      "yt_like_view_ratio": 155940.59335803986,
+      "yt_comment_view_ratio": 174458.97025108337,
+      "yt_category_id": 40824.05215835571,
+      "yt_tag_count": 150930.0928697586,
+      "yt_upload_delay_days": 127286.43300962448,
+      "yt_stats_imputed": 5056.776551246643,
+      "title_emb_0": 215981.17087745667,
+      "title_emb_1": 275283.55186605453,
+      "title_emb_2": 256121.07666683197,
+      "title_emb_3": 223837.6057729721,
+      "title_emb_4": 233689.8814382553,
+      "title_emb_5": 228806.8106560707,
+      "title_emb_6": 247768.09929275513,
+      "title_emb_7": 292715.1387062073,
+      "title_emb_8": 250646.90148115158,
+      "title_emb_9": 309910.7485833168,
+      "title_emb_10": 302942.291287899,
+      "title_emb_11": 231199.34883737564,
+      "title_emb_12": 343239.5513730049,
+      "title_emb_13": 399748.1703109741,
+      "title_emb_14": 374898.3498072624,
+      "title_emb_15": 303621.395755291,
+      "title_emb_16": 396447.7794909477,
+      "title_emb_17": 274753.91372060776,
+      "title_emb_18": 310335.6534585953,
+      "title_emb_19": 336579.5456972122,
+      "rag_similar_median_log_views": 192385.86495113373,
+      "rag_similar_mean_log_views": 183828.7885632515,
+      "rag_similar_std_log_views": 257969.56633901596,
+      "rag_similar_max_log_views": 250412.40687704086,
+      "rag_top5_mean_log_views": 188729.00328493118
+    }
+  },
+  "gp_summary": "<gpboost.basic.GPModel object at 0x0000012E0ADFEE40>",
+  "embeddings_path": "models/title_embeddings.npz"
+}

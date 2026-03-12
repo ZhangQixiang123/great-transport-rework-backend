@@ -22,8 +22,10 @@ Usage:
     python daily_job.py --dry-run    # discover + pick, skip download/upload
 """
 import argparse
+import glob
 import logging
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -41,6 +43,7 @@ BILIUP_COOKIE = os.environ.get("BILIUP_COOKIE", str(SCRIPT_DIR.parent / "scripts
 UPLOAD_COUNT = int(os.environ.get("UPLOAD_COUNT", "2"))
 MODEL_DIR = os.environ.get("MODEL_DIR", str(SCRIPT_DIR / "models"))
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama")  # ollama, openai, or anthropic
 LOG_DIR = os.environ.get("LOG_DIR", str(SCRIPT_DIR.parent / "logs"))
 MAX_KEYWORDS = int(os.environ.get("MAX_KEYWORDS", "10"))
 VIDEOS_PER_KEYWORD = int(os.environ.get("VIDEOS_PER_KEYWORD", "5"))
@@ -89,6 +92,7 @@ def run_discovery(logger: logging.Logger) -> bool:
         "--max-keywords", str(MAX_KEYWORDS),
         "--videos-per-keyword", str(VIDEOS_PER_KEYWORD),
         "--max-age-days", str(MAX_AGE_DAYS),
+        "--backend", LLM_BACKEND,
     ]
     logger.info("CMD: %s", " ".join(cmd))
     result = subprocess.run(
@@ -126,15 +130,107 @@ def pick_videos(logger: logging.Logger):
     return picks
 
 
-def transfer_video(video_id: str, logger: logging.Logger) -> bool:
-    """Shell out to yt-transfer to download + upload one video."""
+def _get_llm_scorer(logger: logging.Logger):
+    """Lazily create and cache an LLMScorer instance."""
+    if not hasattr(_get_llm_scorer, "_instance"):
+        try:
+            from app.discovery.llm_scorer import LLMScorer
+            _get_llm_scorer._instance = LLMScorer(
+                model=LLM_MODEL, backend_type=LLM_BACKEND,
+            )
+        except Exception as e:
+            logger.warning("Cannot create LLMScorer: %s", e)
+            _get_llm_scorer._instance = None
+    return _get_llm_scorer._instance
+
+
+def _translate_title(english_title: str, logger: logging.Logger) -> str:
+    """Translate title to Chinese, falling back to original on failure."""
+    scorer = _get_llm_scorer(logger)
+    if scorer is None:
+        return english_title
+    result = scorer.translate_title(english_title)
+    if result and result.chinese_title.strip():
+        logger.info("Title translated: '%s' -> '%s'", english_title, result.chinese_title)
+        return result.chinese_title
+    logger.warning("Title translation failed, using original: '%s'", english_title)
+    return english_title
+
+
+def _build_description(pick: dict) -> str:
+    """Build a rich Bilibili description from YouTube metadata."""
+    video_id = pick["youtube_video_id"]
+    channel = pick.get("youtube_channel", "")
+    views = pick.get("youtube_views", 0)
+    title = pick.get("youtube_title", "")
+
+    lines = []
+    lines.append(f"Original: https://www.youtube.com/watch?v={video_id}")
+    if channel:
+        lines.append(f"Channel: {channel}")
+    if views:
+        lines.append(f"YouTube views: {views:,}")
+    if title:
+        lines.append(f"Original title: {title}")
+    return "\n".join(lines)
+
+
+def _parse_bvid(output: str) -> str | None:
+    """Extract Bilibili BV ID from yt-transfer output."""
+    match = re.search(r"\bBV1[0-9a-zA-Z]{9}\b", output)
+    return match.group(0) if match else None
+
+
+def _find_srt_file(downloads_dir: str) -> str | None:
+    """Find the most recent Chinese SRT subtitle file in downloads."""
+    pattern = os.path.join(downloads_dir, "*.zh-Hans.srt")
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    # Return most recently modified
+    return max(files, key=os.path.getmtime)
+
+
+def _upload_subtitle(bvid: str, srt_path: str, logger: logging.Logger) -> bool:
+    """Upload CC subtitle to Bilibili for the given video."""
+    try:
+        from app.bilibili_subtitle import upload_subtitle
+        ok = upload_subtitle(bvid, srt_path, BILIUP_COOKIE)
+        if ok:
+            logger.info("Subtitle uploaded for %s from %s", bvid, srt_path)
+        else:
+            logger.warning("Subtitle upload returned False for %s", bvid)
+        return ok
+    except Exception as e:
+        logger.error("Subtitle upload failed for %s: %s", bvid, e)
+        return False
+
+
+def transfer_video(pick: dict, logger: logging.Logger) -> bool:
+    """Download + upload one video with Chinese title, rich description, and CC subtitles."""
+    video_id = pick["youtube_video_id"]
+    english_title = pick.get("youtube_title", "")
+
+    # Step A: Translate title
+    chinese_title = _translate_title(english_title, logger) if english_title else ""
+
+    # Step B: Build description
+    description = _build_description(pick)
+
+    # Step C: Build yt-transfer command
     cmd = [
         TRANSPORT_BINARY,
         "--video-id", video_id,
         "--platform", "bilibili",
         "--biliup-cookie", BILIUP_COOKIE,
     ]
+    if chinese_title:
+        cmd += ["--biliup-title", chinese_title]
+    if description:
+        cmd += ["--biliup-desc", description]
+
     logger.info("CMD: %s", " ".join(cmd))
+
     # Add venv Scripts dir to PATH so yt-transfer can find yt-dlp & biliup
     env = os.environ.copy()
     venv_bin = str(SCRIPT_DIR / ".venv" / ("Scripts" if sys.platform == "win32" else "bin"))
@@ -153,6 +249,24 @@ def transfer_video(video_id: str, logger: logging.Logger) -> bool:
         logger.error("yt-transfer failed (exit %d):\n%s", result.returncode, result.stderr)
         return False
     logger.info("yt-transfer stdout:\n%s", result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
+
+    # Step D: Parse bvid from output
+    combined_output = result.stdout + result.stderr
+    bvid = _parse_bvid(combined_output)
+
+    # Step E: Upload CC subtitle if we have bvid and an SRT file
+    if bvid:
+        logger.info("Parsed bvid: %s", bvid)
+        downloads_dir = str(SCRIPT_DIR.parent / "downloads")
+        srt_path = _find_srt_file(downloads_dir)
+        if srt_path:
+            logger.info("Found SRT subtitle: %s", srt_path)
+            _upload_subtitle(bvid, srt_path, logger)
+        else:
+            logger.info("No Chinese SRT subtitle found in %s", downloads_dir)
+    else:
+        logger.warning("Could not parse bvid from yt-transfer output")
+
     return True
 
 
@@ -193,6 +307,12 @@ def main():
         sys.exit(0)
 
     if args.dry_run:
+        logger.info("--dry-run: translating titles for preview")
+        for pick in picks:
+            title = pick.get("youtube_title", "")
+            if title:
+                chinese = _translate_title(title, logger)
+                logger.info("  [%s] %s -> %s", pick["youtube_video_id"], title, chinese)
         logger.info("--dry-run: skipping download/upload")
         logger.info("======== Daily job finished (dry run) ========")
         return
@@ -206,7 +326,7 @@ def main():
         title = pick["youtube_title"]
         logger.info("--- Processing: %s (%s) ---", vid, title)
         try:
-            ok = transfer_video(vid, logger)
+            ok = transfer_video(pick, logger)
             if ok:
                 mark_uploaded(vid, logger)
                 uploaded += 1

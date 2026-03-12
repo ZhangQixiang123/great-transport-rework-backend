@@ -12,6 +12,7 @@ LightGBM mode (use_random_intercepts=False):
   Pure fixed effects — same prediction quality for known and unknown channels.
 """
 import json
+import logging
 import math
 import os
 from typing import Dict, List, Optional
@@ -21,7 +22,9 @@ import lightgbm as lgb
 import numpy as np
 
 from ..db.database import CompetitorVideo
-from ..training.features import FEATURE_NAMES, LABEL_NAMES, extract_features_single
+from ..training.features import FEATURE_NAMES, LABEL_NAMES, N_EMBEDDING_DIMS, extract_features_single
+
+logger = logging.getLogger(__name__)
 
 
 class RankerModel:
@@ -49,6 +52,11 @@ class RankerModel:
         self._feature_names: List[str] = list(FEATURE_NAMES)
         self._use_random_intercepts: bool = True
 
+        # Embedder and VectorStore (optional, loaded lazily)
+        self._embedder = None
+        self._vector_store = None
+        self._pca = None
+
         if metadata_path and os.path.exists(metadata_path):
             with open(metadata_path, "r", encoding="utf-8") as f:
                 self.metadata = json.load(f)
@@ -60,6 +68,10 @@ class RankerModel:
         else:
             self.model = lgb.Booster(model_file=model_path)
 
+        # Try to load embedder and vector store from model directory
+        model_dir = os.path.dirname(model_path)
+        self._try_load_embedder(model_dir)
+
     def _load_metadata(self):
         """Extract inference-relevant data from metadata."""
         if not self.metadata:
@@ -70,6 +82,34 @@ class RankerModel:
         saved_names = self.metadata.get("feature_names")
         if saved_names:
             self._feature_names = saved_names
+
+    def _try_load_embedder(self, model_dir: str) -> None:
+        """Try to load fine-tuned embedder and vector store. Graceful on failure."""
+        embedder_path = os.path.join(model_dir, "embedder.pt")
+        vs_path = os.path.join(model_dir, "vector_store.npz")
+
+        if not os.path.exists(embedder_path):
+            return
+
+        try:
+            from ..embeddings.model import TitleEmbedder
+            from ..embeddings.vector_store import VectorStore
+            self._embedder = TitleEmbedder.load(embedder_path)
+            logger.info("Loaded fine-tuned embedder from %s", embedder_path)
+
+            if os.path.exists(vs_path):
+                self._vector_store = VectorStore.load(vs_path)
+                logger.info("Loaded VectorStore from %s", vs_path)
+
+            pca_path = os.path.join(model_dir, "pca.pkl")
+            if os.path.exists(pca_path):
+                import joblib
+                self._pca = joblib.load(pca_path)
+                logger.info("Loaded PCA from %s", pca_path)
+        except Exception:
+            logger.warning("Failed to load embedder/VectorStore", exc_info=True)
+            self._embedder = None
+            self._vector_store = None
 
     @classmethod
     def load_latest(cls, model_dir: str = "models") -> "RankerModel":
@@ -118,10 +158,26 @@ class RankerModel:
             if yt_stats:
                 yt_imputed = True
 
+        # Auto-embed title if embedder is available and no embedding provided
+        rag_features = None
+        if self._embedder is not None and title_embedding is None:
+            try:
+                fine_emb = self._embedder.encode([video.title])  # [1, proj_dim]
+                # PCA reduce to N_EMBEDDING_DIMS for title_emb_* features
+                if self._pca is not None:
+                    title_embedding = self._pca.transform(fine_emb)[0]
+                # Query RAG features
+                if self._vector_store is not None:
+                    rag_features = self._vector_store.query(
+                        fine_emb[0], exclude_bvid=video.bvid,
+                    )
+            except Exception:
+                logger.warning("Failed to auto-embed title", exc_info=True)
+
         # Extract features
         feat_dict = extract_features_single(
             video, yt_stats=yt_stats, yt_imputed=yt_imputed,
-            title_embedding=title_embedding,
+            title_embedding=title_embedding, rag_features=rag_features,
         )
         feat_array = np.array([feat_dict[f] for f in self._feature_names]).reshape(1, -1)
 
