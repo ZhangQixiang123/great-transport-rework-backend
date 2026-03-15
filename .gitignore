@@ -25,7 +25,10 @@ node_modules/
 *_log.txt
 
 # ML model binaries (keep metadata, exclude large model files)
+ml-service/models/*.pt
+ml-service/models/*.pkl
 ml-service/models/*.txt
+ml-service/models/finetuned/
 !ml-service/models/.gitkeep
 
 yt-transfer
