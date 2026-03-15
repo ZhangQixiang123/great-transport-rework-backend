@@ -39,6 +39,18 @@ def _get_device() -> str:
     return "cpu"
 
 
+def _try_compile(model: nn.Module) -> nn.Module:
+    """Compile model with best available backend, or return uncompiled."""
+    try:
+        import importlib
+        if importlib.util.find_spec("triton") is not None:
+            return torch.compile(model)
+        return torch.compile(model, backend="aot_eager")
+    except Exception as e:
+        logger.warning("torch.compile unavailable, running eager: %s", e)
+        return model
+
+
 def _compute_metrics(
     predictions: np.ndarray, targets: np.ndarray,
 ) -> Dict[str, float]:
@@ -228,12 +240,11 @@ def train_predictor(
         )
 
         # Create model
-        model = NeuralPredictor(
+        raw_model = NeuralPredictor(
             candidate_hidden=candidate_hidden,
             similar_hidden=similar_hidden,
         ).to(device)
-        if device == "cuda":
-            model = torch.compile(model)
+        model = _try_compile(raw_model) if device == "cuda" else raw_model
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
 
@@ -326,7 +337,7 @@ def train_predictor(
             if val_loss < best_val_loss - 1e-4:
                 best_val_loss = val_loss
                 patience_counter = 0
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_state = {k: v.cpu().clone() for k, v in raw_model.state_dict().items()}
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
@@ -335,7 +346,7 @@ def train_predictor(
 
         # Restore best model and evaluate
         if best_state is not None:
-            model.load_state_dict(best_state)
+            raw_model.load_state_dict(best_state)
         model.eval()
 
         all_val_preds = []
@@ -369,7 +380,7 @@ def train_predictor(
         # Track best overall model
         if best_val_loss < best_global_val_loss:
             best_global_val_loss = best_val_loss
-            best_global_model = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_global_model = {k: v.cpu().clone() for k, v in raw_model.state_dict().items()}
 
     # ── Aggregate CV results ──
     mean_metrics = {}
@@ -386,12 +397,11 @@ def train_predictor(
 
     # ── Train final model on all data ──
     logger.info("Training final model on all %d samples...", len(samples))
-    final_model = NeuralPredictor(
+    raw_final = NeuralPredictor(
         candidate_hidden=candidate_hidden,
         similar_hidden=similar_hidden,
     ).to(device)
-    if device == "cuda":
-        final_model = torch.compile(final_model)
+    final_model = _try_compile(raw_final) if device == "cuda" else raw_final
 
     full_dataset = PredictorDataset(samples)
     full_loader = DataLoader(
@@ -438,9 +448,8 @@ def train_predictor(
     # Save (unwrap torch.compile wrapper if present)
     os.makedirs(model_dir, exist_ok=True)
     save_path = os.path.join(model_dir, "predictor.pt")
-    raw_model = getattr(final_model, "_orig_mod", final_model)
-    raw_model.cpu()
-    raw_model.save(save_path)
+    raw_final.cpu()
+    raw_final.save(save_path)
 
     result_metrics = {
         "training_samples": len(samples),
@@ -452,4 +461,4 @@ def train_predictor(
     }
 
     logger.info("Neural predictor training complete. Saved to %s", save_path)
-    return raw_model, result_metrics
+    return raw_final, result_metrics

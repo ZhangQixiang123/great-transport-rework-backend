@@ -26,7 +26,10 @@ type BiliupUploaderOptions struct {
 }
 
 type BiliupUploader struct {
-	opts BiliupUploaderOptions
+	opts         BiliupUploaderOptions
+	overrideTitle string
+	overrideDesc  string
+	overrideTags  []string
 }
 
 func NewBiliupUploader(opts BiliupUploaderOptions) *BiliupUploader {
@@ -34,6 +37,14 @@ func NewBiliupUploader(opts BiliupUploaderOptions) *BiliupUploader {
 		opts.Limit = 3
 	}
 	return &BiliupUploader{opts: opts}
+}
+
+// SetVideoMeta sets per-video metadata overrides for the next upload.
+// The overrides are cleared after buildMetadata returns.
+func (u *BiliupUploader) SetVideoMeta(title, desc string, tags []string) {
+	u.overrideTitle = title
+	u.overrideDesc = desc
+	u.overrideTags = tags
 }
 
 // UploadResult contains the result of a successful upload.
@@ -157,8 +168,17 @@ type biliupMetadata struct {
 }
 
 func (u *BiliupUploader) buildMetadata(path string) biliupMetadata {
+	// Clear overrides after this call (deferred so they're available during the method)
+	defer func() {
+		u.overrideTitle = ""
+		u.overrideDesc = ""
+		u.overrideTags = nil
+	}()
+
 	var title string
-	if u.opts.Title != "" {
+	if u.overrideTitle != "" {
+		title = u.overrideTitle
+	} else if u.opts.Title != "" {
 		title = u.opts.Title
 	} else {
 		base := filepath.Base(path)
@@ -172,16 +192,27 @@ func (u *BiliupUploader) buildMetadata(path string) biliupMetadata {
 		}
 	}
 
-	desc := strings.TrimSpace(u.opts.Description)
-	if desc == "" {
-		desc = fmt.Sprintf("Uploaded automatically: %s", title)
+	var desc string
+	if u.overrideDesc != "" {
+		desc = u.overrideDesc
+	} else {
+		desc = strings.TrimSpace(u.opts.Description)
+		if desc == "" {
+			desc = fmt.Sprintf("Uploaded automatically: %s", title)
+		}
 	}
+
 	dynamic := strings.TrimSpace(u.opts.Dynamic)
 	if dynamic == "" {
 		dynamic = desc
 	}
 
-	tag := strings.Join(filterEmpty(u.opts.Tags), ",")
+	var tag string
+	if u.overrideTags != nil {
+		tag = strings.Join(filterEmpty(u.overrideTags), ",")
+	} else {
+		tag = strings.Join(filterEmpty(u.opts.Tags), ",")
+	}
 
 	return biliupMetadata{
 		Title:       title,

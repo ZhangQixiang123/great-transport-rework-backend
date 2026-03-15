@@ -116,6 +116,20 @@ type UploadStats struct {
 	AvgEngagementRate      float64
 }
 
+// UploadJob represents a video upload job submitted via the HTTP API.
+type UploadJob struct {
+	ID           int64
+	VideoID      string
+	Status       string // pending, downloading, uploading, completed, failed
+	Title        string
+	Description  string
+	Tags         string
+	BilibiliBvid string
+	ErrorMessage string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // UploadWithPerformance combines upload info with latest performance data.
 type UploadWithPerformance struct {
 	VideoID          string

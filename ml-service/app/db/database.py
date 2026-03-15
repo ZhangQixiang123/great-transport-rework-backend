@@ -870,3 +870,447 @@ class Database:
             pass  # Table may not exist yet
 
         return ids
+
+    # ── Skill-Based Discovery Framework ──────────────────────────────────
+
+    def ensure_skill_tables(self) -> None:
+        """Create skill framework tables if they don't exist."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS skills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                system_prompt TEXT NOT NULL,
+                prompt_template TEXT NOT NULL,
+                output_schema TEXT NOT NULL,
+                version INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_id INTEGER REFERENCES skills(id),
+                version INTEGER NOT NULL,
+                system_prompt TEXT NOT NULL,
+                prompt_template TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                change_reason TEXT,
+                performance_before TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_skill_versions_skill
+            ON skill_versions(skill_id, version)
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT NOT NULL,
+                example_queries TEXT,
+                failed_queries TEXT,
+                youtube_channels TEXT,
+                youtube_categories TEXT,
+                search_tips TEXT,
+                bilibili_check TEXT,
+                audience_notes TEXT,
+                source TEXT DEFAULT 'manual',
+                total_queries INTEGER DEFAULT 0,
+                yielded_queries INTEGER DEFAULT 0,
+                yield_rate REAL DEFAULT 0.0,
+                total_recommended INTEGER DEFAULT 0,
+                total_transported INTEGER DEFAULT 0,
+                successful_transports INTEGER DEFAULT 0,
+                transport_success_rate REAL,
+                avg_bilibili_views REAL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                retired_at TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_id INTEGER REFERENCES strategies(id),
+                query TEXT NOT NULL,
+                query_result_count INTEGER,
+                query_avg_views INTEGER,
+                yield_success INTEGER DEFAULT 0,
+                youtube_video_id TEXT,
+                youtube_title TEXT,
+                youtube_channel TEXT,
+                youtube_channel_id TEXT,
+                youtube_views INTEGER,
+                youtube_likes INTEGER,
+                youtube_category_id INTEGER,
+                youtube_duration_seconds INTEGER,
+                bilibili_check TEXT,
+                bilibili_similar_count INTEGER,
+                bilibili_novelty_score REAL,
+                was_recommended INTEGER DEFAULT 0,
+                was_transported INTEGER DEFAULT 0,
+                bilibili_bvid TEXT,
+                bilibili_views INTEGER,
+                outcome TEXT,
+                run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                outcome_recorded_at TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_strategy_runs_strategy
+            ON strategy_runs(strategy_id)
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_strategy_runs_yt_id
+            ON strategy_runs(youtube_video_id)
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS followed_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                youtube_channel_id TEXT,
+                channel_name TEXT UNIQUE NOT NULL,
+                reason TEXT,
+                source TEXT DEFAULT 'manual',
+                strategy_id INTEGER,
+                transport_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                last_checked_at TIMESTAMP,
+                is_active INTEGER DEFAULT 1,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS scoring_params (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                params_json TEXT NOT NULL,
+                source TEXT DEFAULT 'competitor',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.commit()
+
+    # ── Skill CRUD ───────────────────────────────────────────────────────
+
+    def get_skill(self, name: str) -> Optional[Dict[str, Any]]:
+        """Get a skill by name."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        row = self._conn.execute(
+            "SELECT * FROM skills WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_skill(
+        self, name: str, system_prompt: str, prompt_template: str,
+        output_schema: str,
+    ) -> int:
+        """Insert or update a skill. Returns the skill id."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        self._conn.execute("""
+            INSERT INTO skills (name, system_prompt, prompt_template, output_schema)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                system_prompt = excluded.system_prompt,
+                prompt_template = excluded.prompt_template,
+                output_schema = excluded.output_schema,
+                updated_at = CURRENT_TIMESTAMP
+        """, (name, system_prompt, prompt_template, output_schema))
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT id FROM skills WHERE name = ?", (name,)
+        ).fetchone()
+        return row["id"]
+
+    def snapshot_skill_version(
+        self, name: str, changed_by: str, reason: str,
+        performance_before: Optional[str] = None,
+    ) -> None:
+        """Save a snapshot of the current skill version before mutation."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        skill = self.get_skill(name)
+        if not skill:
+            return
+        self._conn.execute("""
+            INSERT INTO skill_versions
+                (skill_id, version, system_prompt, prompt_template,
+                 changed_by, change_reason, performance_before)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            skill["id"], skill["version"], skill["system_prompt"],
+            skill["prompt_template"], changed_by, reason, performance_before,
+        ))
+        self._conn.commit()
+
+    def get_skill_versions(self, name: str) -> List[Dict[str, Any]]:
+        """Get all version snapshots for a skill."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        skill = self.get_skill(name)
+        if not skill:
+            return []
+        rows = self._conn.execute("""
+            SELECT * FROM skill_versions
+            WHERE skill_id = ?
+            ORDER BY version DESC
+        """, (skill["id"],)).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_skill_prompt(
+        self, name: str, system_prompt: str, prompt_template: str,
+    ) -> None:
+        """Update skill prompts and increment version."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        self._conn.execute("""
+            UPDATE skills SET
+                system_prompt = ?,
+                prompt_template = ?,
+                version = version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE name = ?
+        """, (system_prompt, prompt_template, name))
+        self._conn.commit()
+
+    # ── Strategy CRUD ────────────────────────────────────────────────────
+
+    def get_strategy(self, name: str) -> Optional[Dict[str, Any]]:
+        """Get a strategy by name."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        row = self._conn.execute(
+            "SELECT * FROM strategies WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_strategies(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        """List strategies."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        query = "SELECT * FROM strategies"
+        if active_only:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY created_at"
+        rows = self._conn.execute(query).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_strategy(
+        self, name: str, description: str,
+        example_queries: Optional[str] = None,
+        failed_queries: Optional[str] = None,
+        youtube_channels: Optional[str] = None,
+        youtube_categories: Optional[str] = None,
+        search_tips: Optional[str] = None,
+        bilibili_check: Optional[str] = None,
+        audience_notes: Optional[str] = None,
+        source: str = "manual",
+    ) -> int:
+        """Add a new strategy. Returns the strategy id."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        cursor = self._conn.execute("""
+            INSERT INTO strategies
+                (name, description, example_queries, failed_queries,
+                 youtube_channels, youtube_categories, search_tips,
+                 bilibili_check, audience_notes, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            name, description, example_queries, failed_queries,
+            youtube_channels, youtube_categories, search_tips,
+            bilibili_check, audience_notes, source,
+        ))
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def update_strategy_stats(
+        self, strategy_id: int,
+        total_queries: Optional[int] = None,
+        yielded_queries: Optional[int] = None,
+        total_recommended: Optional[int] = None,
+        total_transported: Optional[int] = None,
+        successful_transports: Optional[int] = None,
+        avg_bilibili_views: Optional[float] = None,
+    ) -> None:
+        """Update strategy performance statistics."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        updates = []
+        params: list = []
+        if total_queries is not None:
+            updates.append("total_queries = ?")
+            params.append(total_queries)
+        if yielded_queries is not None:
+            updates.append("yielded_queries = ?")
+            params.append(yielded_queries)
+        if total_recommended is not None:
+            updates.append("total_recommended = ?")
+            params.append(total_recommended)
+        if total_transported is not None:
+            updates.append("total_transported = ?")
+            params.append(total_transported)
+        if successful_transports is not None:
+            updates.append("successful_transports = ?")
+            params.append(successful_transports)
+        if avg_bilibili_views is not None:
+            updates.append("avg_bilibili_views = ?")
+            params.append(avg_bilibili_views)
+        # Recompute derived rates
+        if total_queries is not None and yielded_queries is not None:
+            rate = yielded_queries / max(total_queries, 1)
+            updates.append("yield_rate = ?")
+            params.append(rate)
+        if total_transported is not None and successful_transports is not None:
+            rate = successful_transports / max(total_transported, 1)
+            updates.append("transport_success_rate = ?")
+            params.append(rate)
+        if not updates:
+            return
+        params.append(strategy_id)
+        self._conn.execute(
+            f"UPDATE strategies SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self._conn.commit()
+
+    def retire_strategy(self, name: str) -> None:
+        """Retire a strategy by name."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        self._conn.execute("""
+            UPDATE strategies SET is_active = 0, retired_at = CURRENT_TIMESTAMP
+            WHERE name = ?
+        """, (name,))
+        self._conn.commit()
+
+    # ── Strategy Run CRUD ────────────────────────────────────────────────
+
+    def save_strategy_run(
+        self, strategy_id: int, query: str,
+        bilibili_check: Optional[str] = None,
+    ) -> int:
+        """Save a new strategy run record. Returns the run id."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        cursor = self._conn.execute("""
+            INSERT INTO strategy_runs (strategy_id, query, bilibili_check)
+            VALUES (?, ?, ?)
+        """, (strategy_id, query, bilibili_check))
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def update_strategy_run(self, run_id: int, **kwargs) -> None:
+        """Update a strategy run with additional data."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        if not kwargs:
+            return
+        allowed = {
+            "query_result_count", "query_avg_views", "yield_success",
+            "youtube_video_id", "youtube_title", "youtube_channel",
+            "youtube_channel_id", "youtube_views", "youtube_likes",
+            "youtube_category_id", "youtube_duration_seconds",
+            "bilibili_similar_count", "bilibili_novelty_score",
+            "was_recommended", "was_transported", "bilibili_bvid",
+            "bilibili_views", "outcome", "outcome_recorded_at",
+        }
+        updates = []
+        params: list = []
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f"{k} = ?")
+                params.append(v)
+        if not updates:
+            return
+        params.append(run_id)
+        self._conn.execute(
+            f"UPDATE strategy_runs SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self._conn.commit()
+
+    def get_strategy_yield_stats(self) -> List[Dict[str, Any]]:
+        """Get yield statistics per strategy."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        rows = self._conn.execute("""
+            SELECT s.name, s.total_queries, s.yielded_queries, s.yield_rate
+            FROM strategies s
+            WHERE s.is_active = 1
+            ORDER BY s.yield_rate DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_latest_run_yields(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent strategy run results for yield analysis."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        rows = self._conn.execute("""
+            SELECT sr.*, s.name as strategy_name
+            FROM strategy_runs sr
+            JOIN strategies s ON sr.strategy_id = s.id
+            ORDER BY sr.run_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Followed Channel CRUD ────────────────────────────────────────────
+
+    def add_followed_channel(
+        self, channel_name: str,
+        youtube_channel_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        source: str = "manual",
+        strategy_id: Optional[int] = None,
+    ) -> int:
+        """Add a followed YouTube channel. Returns the channel id."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        cursor = self._conn.execute("""
+            INSERT OR IGNORE INTO followed_channels
+                (channel_name, youtube_channel_id, reason, source, strategy_id)
+            VALUES (?, ?, ?, ?, ?)
+        """, (channel_name, youtube_channel_id, reason, source, strategy_id))
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def list_followed_channels(
+        self, active_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """List followed YouTube channels."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        query = "SELECT * FROM followed_channels"
+        if active_only:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY added_at"
+        rows = self._conn.execute(query).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Scoring Params ───────────────────────────────────────────────────
+
+    def save_scoring_params(
+        self, params_json: str, source: str = "competitor",
+    ) -> None:
+        """Save scoring parameters as JSON."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        self._conn.execute("""
+            INSERT INTO scoring_params (params_json, source) VALUES (?, ?)
+        """, (params_json, source))
+        self._conn.commit()
+
+    def get_scoring_params(self) -> Optional[Dict[str, Any]]:
+        """Get the latest scoring parameters."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        row = self._conn.execute("""
+            SELECT * FROM scoring_params ORDER BY id DESC LIMIT 1
+        """).fetchone()
+        return dict(row) if row else None

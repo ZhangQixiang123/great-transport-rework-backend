@@ -146,6 +146,21 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_competitor_videos_uid ON competitor_videos(bilibili_uid);`,
 		`CREATE INDEX IF NOT EXISTS idx_competitor_videos_label ON competitor_videos(label);`,
 		`CREATE INDEX IF NOT EXISTS idx_competitor_videos_youtube ON competitor_videos(youtube_source_id);`,
+		// Upload jobs table (HTTP API)
+		`CREATE TABLE IF NOT EXISTS upload_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			video_id TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			title TEXT,
+			description TEXT,
+			tags TEXT,
+			bilibili_bvid TEXT,
+			error_message TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_upload_jobs_video ON upload_jobs(video_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_upload_jobs_status ON upload_jobs(status);`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -1150,4 +1165,49 @@ WHERE 1=1`
 		videos = append(videos, v)
 	}
 	return videos, rows.Err()
+}
+
+// Upload Jobs Methods
+
+// CreateUploadJob inserts a new upload job and returns its ID.
+func (s *SQLiteStore) CreateUploadJob(ctx context.Context, videoID, title, desc, tags string) (int64, error) {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO upload_jobs (video_id, status, title, description, tags, created_at, updated_at)
+VALUES (?, 'pending', ?, ?, ?, ?, ?)`, videoID, title, desc, tags, now, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// UpdateUploadJobStatus updates the status, bvid, and error message for an upload job.
+func (s *SQLiteStore) UpdateUploadJobStatus(ctx context.Context, id int64, status, bvid, errorMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_jobs SET status = ?, bilibili_bvid = ?, error_message = ?, updated_at = ?
+WHERE id = ?`, status, nullableString(bvid), nullableString(errorMsg), time.Now().UTC(), id)
+	return err
+}
+
+// GetUploadJob retrieves an upload job by ID.
+func (s *SQLiteStore) GetUploadJob(ctx context.Context, id int64) (*UploadJob, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
+FROM upload_jobs WHERE id = ?`, id)
+
+	var job UploadJob
+	var title, desc, tags, bvid, errMsg sql.NullString
+	err := row.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	job.Title = title.String
+	job.Description = desc.String
+	job.Tags = tags.String
+	job.BilibiliBvid = bvid.String
+	job.ErrorMessage = errMsg.String
+	return &job, nil
 }

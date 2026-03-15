@@ -1,7 +1,7 @@
 """Fine-tuning training loop for TitleEmbedder.
 
 Concepts: optimizer.zero_grad(), loss.backward(), optimizer.step(),
-          model.train(), model.eval(), torch.no_grad(), ReduceLROnPlateau,
+          model.train(), model.eval(), torch.inference_mode(), ReduceLROnPlateau,
           early stopping, device management.
 """
 import logging
@@ -124,14 +124,22 @@ def fine_tune_embeddings(
 
     reg_head = RegressionHead(input_dim=projection_dim).to(device)
 
+    # Keep raw reference for state_dict / save (torch.compile wraps the module)
+    raw_embedder = embedder
+
+    if device == "cuda":
+        from ..prediction.trainer import _try_compile
+        embedder = _try_compile(embedder)
+        reg_head = _try_compile(reg_head)
+
     # Optimizer: use differential LR when backbone is unfrozen
     if freeze_backbone:
-        all_params = list(embedder.projection.parameters()) + list(reg_head.parameters())
+        all_params = list(raw_embedder.projection.parameters()) + list(reg_head.parameters())
         optimizer = torch.optim.Adam(all_params, lr=lr)
     else:
         optimizer = torch.optim.Adam([
-            {"params": embedder.backbone.parameters(), "lr": backbone_lr},
-            {"params": embedder.projection.parameters(), "lr": lr},
+            {"params": raw_embedder.backbone.parameters(), "lr": backbone_lr},
+            {"params": raw_embedder.projection.parameters(), "lr": lr},
             {"params": reg_head.parameters(), "lr": lr},
         ])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -181,7 +189,7 @@ def fine_tune_embeddings(
         val_loss_sum = 0.0
         val_count = 0
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for batch in val_loader:
                 input_ids = batch["input_ids"].to(device, non_blocking=True)
                 attention_mask = batch["attention_mask"].to(device, non_blocking=True)
@@ -207,7 +215,7 @@ def fine_tune_embeddings(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch + 1
-            best_state = {k: v.cpu().clone() for k, v in embedder.state_dict().items()}
+            best_state = {k: v.cpu().clone() for k, v in raw_embedder.state_dict().items()}
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -217,18 +225,18 @@ def fine_tune_embeddings(
 
     # Restore best embedder state
     if best_state is not None:
-        embedder.load_state_dict(best_state)
-    embedder.to(device)
+        raw_embedder.load_state_dict(best_state)
+    raw_embedder.to(device)
 
     # Save
     os.makedirs(model_dir, exist_ok=True)
     embedder_path = os.path.join(model_dir, "embedder.pt")
-    embedder.save(embedder_path)
+    raw_embedder.save(embedder_path)
 
     # Build vector store from all videos
     logger.info("Building vector store from %d videos...", len(videos))
     all_titles = [v.title for v in videos]
-    all_embs = embedder.encode(all_titles, batch_size=batch_size)
+    all_embs = raw_embedder.encode(all_titles, batch_size=batch_size)
     all_bvids = [v.bvid for v in videos]
     all_channels = [v.bilibili_uid for v in videos]
 
@@ -253,4 +261,4 @@ def fine_tune_embeddings(
         best_epoch, best_val_loss, vector_store.size,
     )
 
-    return embedder, metrics
+    return raw_embedder, metrics

@@ -182,3 +182,73 @@ func TestBiliupUploader_BuildMetadata(t *testing.T) {
 		t.Errorf("Tag = %q, want %q", meta.Tag, "tag1,tag2")
 	}
 }
+
+func TestBuildMetadataOverride(t *testing.T) {
+	uploader := NewBiliupUploader(BiliupUploaderOptions{
+		Description: "Default desc",
+		Tags:        []string{"default"},
+	})
+
+	// Set overrides
+	uploader.SetVideoMeta("Custom Title", "Custom Chinese description\n本视频搬运自YouTube", []string{"搬运", "美食"})
+
+	meta := uploader.buildMetadata("/path/to/video.mp4")
+
+	if meta.Title != "Custom Title" {
+		t.Errorf("Title = %q, want %q", meta.Title, "Custom Title")
+	}
+	if meta.Description != "Custom Chinese description\n本视频搬运自YouTube" {
+		t.Errorf("Description = %q, want custom desc", meta.Description)
+	}
+	if meta.Tag != "搬运,美食" {
+		t.Errorf("Tag = %q, want %q", meta.Tag, "搬运,美食")
+	}
+}
+
+func TestBuildMetadataOverride_ClearsAfterUse(t *testing.T) {
+	uploader := NewBiliupUploader(BiliupUploaderOptions{
+		Description: "Default desc",
+		Tags:        []string{"default"},
+	})
+
+	// Set override and build
+	uploader.SetVideoMeta("Override", "Override desc", []string{"override"})
+	_ = uploader.buildMetadata("/path/to/first.mp4")
+
+	// Second call should use defaults again
+	meta := uploader.buildMetadata("/path/to/second.mp4")
+
+	if meta.Title != "second" {
+		t.Errorf("Title after clear = %q, want %q", meta.Title, "second")
+	}
+	if meta.Description != "Default desc" {
+		t.Errorf("Description after clear = %q, want %q", meta.Description, "Default desc")
+	}
+	if meta.Tag != "default" {
+		t.Errorf("Tag after clear = %q, want %q", meta.Tag, "default")
+	}
+}
+
+func TestBuildMetadataOverride_PartialOverride(t *testing.T) {
+	uploader := NewBiliupUploader(BiliupUploaderOptions{
+		Description: "Default desc",
+		Tags:        []string{"default"},
+	})
+
+	// Only override title, leave desc and tags
+	uploader.SetVideoMeta("Custom Title Only", "", nil)
+
+	meta := uploader.buildMetadata("/path/to/video.mp4")
+
+	if meta.Title != "Custom Title Only" {
+		t.Errorf("Title = %q, want %q", meta.Title, "Custom Title Only")
+	}
+	// Description should be default since override is empty
+	if meta.Description != "Default desc" {
+		t.Errorf("Description = %q, want %q", meta.Description, "Default desc")
+	}
+	// Tags should be default since override is nil
+	if meta.Tag != "default" {
+		t.Errorf("Tag = %q, want %q", meta.Tag, "default")
+	}
+}

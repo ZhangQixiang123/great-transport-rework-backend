@@ -54,6 +54,7 @@ func (d *YtDlpDownloader) ListChannelVideoIDs(ctx context.Context, channelURL st
 	args := []string{
 		"--quiet",
 		"--no-warnings",
+		"--no-check-certificates",
 		"--flat-playlist",
 		"--print", "id",
 		"--playlist-items", fmt.Sprintf("1:%d", limit),
@@ -83,6 +84,7 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 		"--quiet",
 		"--no-warnings",
 		"--no-simulate",
+		"--no-check-certificates",
 		"--remote-components", "ejs:github",
 		"-o", outputTemplate,
 	}
@@ -97,12 +99,8 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 	if format != "" {
 		baseArgs = append(baseArgs, "--format", format)
 	}
-	// Download auto-translated Chinese subtitles alongside the video
-	baseArgs = append(baseArgs,
-		"--write-auto-sub",
-		"--sub-lang", "zh-Hans",
-		"--convert-subs", "srt",
-	)
+	// Subtitles are optional — skip if rate-limited (429) to avoid failing the download.
+	// Uncomment to enable: "--write-auto-sub", "--sub-lang", "zh-Hans", "--convert-subs", "srt",
 
 	if d.sleep > 0 {
 		baseArgs = append(baseArgs,
@@ -140,6 +138,7 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 
 func runYtDlpLines(ctx context.Context, args []string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	cmd.Env = ytDlpEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("yt-dlp failed: %w", err)
@@ -159,8 +158,17 @@ type ytDlpResult struct {
 	stderr string
 }
 
+// ytDlpEnv returns the current environment with PYTHONIOENCODING=utf-8
+// to prevent mojibake in yt-dlp output on Windows (GBK console).
+func ytDlpEnv() []string {
+	env := os.Environ()
+	env = append(env, "PYTHONIOENCODING=utf-8")
+	return env
+}
+
 func runYtDlp(ctx context.Context, args []string) (ytDlpResult, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	cmd.Env = ytDlpEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return ytDlpResult{}, err
@@ -193,6 +201,7 @@ func resolveExistingFiles(ctx context.Context, videoURL, outputTemplate, jsRunti
 	args := []string{
 		"--quiet",
 		"--no-warnings",
+		"--no-check-certificates",
 		"--no-download",
 		"--print", "filename",
 		"--remote-components", "ejs:github",
@@ -260,6 +269,7 @@ func (d *YtDlpDownloader) GetVideoMetadata(ctx context.Context, videoID string, 
 	args := []string{
 		"--quiet",
 		"--no-warnings",
+		"--no-check-certificates",
 		"--dump-json",
 		"--skip-download",
 		"--remote-components", "ejs:github",
@@ -289,6 +299,7 @@ func (d *YtDlpDownloader) GetChannelVideosMetadata(ctx context.Context, channelU
 	args := []string{
 		"--quiet",
 		"--no-warnings",
+		"--no-check-certificates",
 		"--dump-json",
 		"--skip-download",
 		"--playlist-items", fmt.Sprintf("1:%d", limit),
@@ -323,6 +334,7 @@ func (d *YtDlpDownloader) GetChannelVideosMetadata(ctx context.Context, channelU
 
 func runYtDlpOutput(ctx context.Context, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	cmd.Env = ytDlpEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -394,7 +394,190 @@ def parse_args():
         help="Only export existing adapter to Ollama"
     )
 
+    # ── Skill-Based Discovery Framework Commands ──
+
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap",
+        help="One-time setup: seed strategies, channels, scoring params"
+    )
+    bootstrap_parser.add_argument(
+        "--skip-llm", action="store_true",
+        help="Skip LLM calls (use default principles)"
+    )
+    bootstrap_parser.add_argument(
+        "--backend", default="ollama",
+        choices=["ollama", "openai", "anthropic"],
+        help="LLM backend for principle generation (default: ollama)"
+    )
+
+    strategy_list_parser = subparsers.add_parser(
+        "strategy-list",
+        help="Show strategies with yield rates and transport stats"
+    )
+
+    strategy_add_parser = subparsers.add_parser(
+        "strategy-add",
+        help="Manually add a new discovery strategy"
+    )
+    strategy_add_parser.add_argument("name", help="Strategy name (snake_case)")
+    strategy_add_parser.add_argument("description", help="Strategy description")
+    strategy_add_parser.add_argument(
+        "--bilibili-check", default="",
+        help="Chinese search term for saturation check"
+    )
+
+    follow_channel_parser = subparsers.add_parser(
+        "follow-channel",
+        help="Add a YouTube channel to follow"
+    )
+    follow_channel_parser.add_argument("channel_name", help="YouTube channel name")
+    follow_channel_parser.add_argument(
+        "--reason", default="",
+        help="Why we follow this channel"
+    )
+
+    skill_show_parser = subparsers.add_parser(
+        "skill-show",
+        help="Show a skill's current prompt and version"
+    )
+    skill_show_parser.add_argument("skill_name", help="Skill name (e.g. strategy_generation)")
+
+    skill_history_parser = subparsers.add_parser(
+        "skill-history",
+        help="Show prompt evolution history for a skill"
+    )
+    skill_history_parser.add_argument("skill_name", help="Skill name")
+    skill_history_parser.add_argument(
+        "--limit", type=int, default=10,
+        help="Number of versions to show (default: 10)"
+    )
+
+    skill_rollback_parser = subparsers.add_parser(
+        "skill-rollback",
+        help="Roll back a skill prompt to a previous version"
+    )
+    skill_rollback_parser.add_argument("skill_name", help="Skill name")
+    skill_rollback_parser.add_argument("version", type=int, help="Target version number")
+
     return parser.parse_args()
+
+
+# ── Skill-Based Discovery Framework Handlers ──
+
+
+def cmd_bootstrap(db: Database, args) -> dict:
+    """Execute the bootstrap command."""
+    from .bootstrap import run_bootstrap
+
+    backend = None
+    if not args.skip_llm:
+        from .llm.backend import create_backend
+        try:
+            backend = create_backend(args.backend)
+        except Exception as e:
+            logger.warning("Could not create LLM backend: %s", e)
+
+    result = run_bootstrap(db, backend=backend, skip_llm=args.skip_llm)
+    return {"command": "bootstrap", **result}
+
+
+def cmd_strategy_list(db: Database, args) -> dict:
+    """Execute the strategy-list command."""
+    db.ensure_skill_tables()
+    strategies = db.list_strategies(active_only=True)
+    return {
+        "command": "strategy-list",
+        "count": len(strategies),
+        "strategies": strategies,
+    }
+
+
+def cmd_strategy_add(db: Database, args) -> dict:
+    """Execute the strategy-add command."""
+    db.ensure_skill_tables()
+    strategy_id = db.add_strategy(
+        name=args.name,
+        description=args.description,
+        bilibili_check=args.bilibili_check or None,
+        source="manual",
+    )
+    return {
+        "command": "strategy-add",
+        "success": True,
+        "strategy_id": strategy_id,
+        "name": args.name,
+    }
+
+
+def cmd_follow_channel(db: Database, args) -> dict:
+    """Execute the follow-channel command."""
+    db.ensure_skill_tables()
+    channel_id = db.add_followed_channel(
+        channel_name=args.channel_name,
+        reason=args.reason or None,
+        source="manual",
+    )
+    return {
+        "command": "follow-channel",
+        "success": True,
+        "channel_name": args.channel_name,
+    }
+
+
+def cmd_skill_show(db: Database, args) -> dict:
+    """Execute the skill-show command."""
+    db.ensure_skill_tables()
+    skill = db.get_skill(args.skill_name)
+    if not skill:
+        return {
+            "command": "skill-show",
+            "error": f"Skill '{args.skill_name}' not found",
+        }
+    return {
+        "command": "skill-show",
+        "name": skill["name"],
+        "version": skill["version"],
+        "system_prompt": skill["system_prompt"],
+        "prompt_template": skill["prompt_template"],
+        "updated_at": skill["updated_at"],
+    }
+
+
+def cmd_skill_history(db: Database, args) -> dict:
+    """Execute the skill-history command."""
+    db.ensure_skill_tables()
+    versions = db.get_skill_versions(args.skill_name)
+    return {
+        "command": "skill-history",
+        "skill_name": args.skill_name,
+        "versions": versions[:args.limit],
+    }
+
+
+def cmd_skill_rollback(db: Database, args) -> dict:
+    """Execute the skill-rollback command."""
+    db.ensure_skill_tables()
+
+    # Need a dummy backend for the Skill class
+    from unittest.mock import MagicMock
+    from .skills.base import Skill
+
+    class RollbackSkill(Skill):
+        def _default_system_prompt(self):
+            return ""
+        def _default_prompt_template(self):
+            return ""
+        def _output_schema(self):
+            return {"type": "object"}
+
+    skill = RollbackSkill(args.skill_name, db, MagicMock())
+    success = skill.rollback(args.version)
+    return {
+        "command": "skill-rollback",
+        "success": success,
+        "skill_name": args.skill_name,
+        "target_version": args.version,
+    }
 
 
 async def cmd_track(db: Database, args) -> dict:
@@ -1000,6 +1183,20 @@ async def main():
             result = cmd_discover_history(db, args)
         elif args.command == "fine-tune":
             result = cmd_fine_tune(db, args)
+        elif args.command == "bootstrap":
+            result = cmd_bootstrap(db, args)
+        elif args.command == "strategy-list":
+            result = cmd_strategy_list(db, args)
+        elif args.command == "strategy-add":
+            result = cmd_strategy_add(db, args)
+        elif args.command == "follow-channel":
+            result = cmd_follow_channel(db, args)
+        elif args.command == "skill-show":
+            result = cmd_skill_show(db, args)
+        elif args.command == "skill-history":
+            result = cmd_skill_history(db, args)
+        elif args.command == "skill-rollback":
+            result = cmd_skill_rollback(db, args)
         else:
             logger.error(f"Unknown command: {args.command}")
             sys.exit(1)
@@ -1204,6 +1401,56 @@ async def main():
                     print(f"  Ollama model: {e.get('ollama_model', 'n/a')}")
             else:
                 print(f"Fine-tuning failed: {result.get('error', 'Unknown error')}")
+
+        elif args.command == "bootstrap":
+            print(f"Strategies seeded: {result.get('strategies_seeded', 0)}")
+            print(f"Channels seeded: {result.get('channels_seeded', 0)}")
+            print(f"Scoring bootstrapped: {result.get('scoring_bootstrapped', False)}")
+            print(f"LLM principles: {result.get('llm_principles', False)}")
+
+        elif args.command == "strategy-list":
+            print(f"Active strategies: {result['count']}")
+            for s in result.get("strategies", []):
+                yr = s.get("yield_rate", 0) or 0
+                print(f"  {s['name']:<30} yield: {yr:.0%}  queries: {s.get('total_queries', 0)}")
+
+        elif args.command == "strategy-add":
+            if result.get("success"):
+                print(f"Added strategy: {result['name']} (id={result['strategy_id']})")
+
+        elif args.command == "follow-channel":
+            if result.get("success"):
+                print(f"Following channel: {result['channel_name']}")
+
+        elif args.command == "skill-show":
+            if result.get("error"):
+                print(f"Error: {result['error']}")
+            else:
+                print(f"Skill: {result['name']} (v{result['version']})")
+                print(f"Updated: {result.get('updated_at', 'n/a')}")
+                print(f"\nSystem prompt:\n{result['system_prompt'][:500]}")
+                if len(result['system_prompt']) > 500:
+                    print(f"  ... ({len(result['system_prompt'])} chars total)")
+                print(f"\nPrompt template:\n{result['prompt_template'][:500]}")
+                if len(result['prompt_template']) > 500:
+                    print(f"  ... ({len(result['prompt_template'])} chars total)")
+
+        elif args.command == "skill-history":
+            versions = result.get("versions", [])
+            if not versions:
+                print(f"No version history for '{result['skill_name']}'")
+            else:
+                print(f"Version history for '{result['skill_name']}':")
+                for v in versions:
+                    print(f"  v{v['version']} by {v['changed_by']} at {v['created_at']}")
+                    if v.get('change_reason'):
+                        print(f"    Reason: {v['change_reason'][:80]}")
+
+        elif args.command == "skill-rollback":
+            if result.get("success"):
+                print(f"Rolled back '{result['skill_name']}' to version {result['target_version']}")
+            else:
+                print(f"Rollback failed: version {result['target_version']} not found")
 
         print(f"{'=' * 50}\n")
 

@@ -693,3 +693,121 @@ func TestGetTrainingDataSummary(t *testing.T) {
 		t.Errorf("Total: got %d, want 0", summary.Total)
 	}
 }
+
+func TestUploadJobCRUD(t *testing.T) {
+	f, err := os.CreateTemp("", "test-upload-job-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a job
+	jobID, err := store.CreateUploadJob(ctx, "dQw4w9WgXcQ", "Test Title", "Test description\n本视频搬运自YouTube", "搬运,音乐")
+	if err != nil {
+		t.Fatalf("CreateUploadJob: %v", err)
+	}
+	if jobID <= 0 {
+		t.Fatalf("expected positive job ID, got %d", jobID)
+	}
+
+	// Get the job
+	job, err := store.GetUploadJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetUploadJob: %v", err)
+	}
+	if job == nil {
+		t.Fatal("GetUploadJob returned nil")
+	}
+	if job.VideoID != "dQw4w9WgXcQ" {
+		t.Errorf("VideoID: got %q, want %q", job.VideoID, "dQw4w9WgXcQ")
+	}
+	if job.Status != "pending" {
+		t.Errorf("Status: got %q, want %q", job.Status, "pending")
+	}
+	if job.Title != "Test Title" {
+		t.Errorf("Title: got %q, want %q", job.Title, "Test Title")
+	}
+	if job.Tags != "搬运,音乐" {
+		t.Errorf("Tags: got %q, want %q", job.Tags, "搬运,音乐")
+	}
+
+	// Update status to downloading
+	if err := store.UpdateUploadJobStatus(ctx, jobID, "downloading", "", ""); err != nil {
+		t.Fatalf("UpdateUploadJobStatus (downloading): %v", err)
+	}
+
+	job, _ = store.GetUploadJob(ctx, jobID)
+	if job.Status != "downloading" {
+		t.Errorf("Status after update: got %q, want %q", job.Status, "downloading")
+	}
+
+	// Update to completed with bvid
+	if err := store.UpdateUploadJobStatus(ctx, jobID, "completed", "BV1AB411c7XY", ""); err != nil {
+		t.Fatalf("UpdateUploadJobStatus (completed): %v", err)
+	}
+
+	job, _ = store.GetUploadJob(ctx, jobID)
+	if job.Status != "completed" {
+		t.Errorf("Status: got %q, want %q", job.Status, "completed")
+	}
+	if job.BilibiliBvid != "BV1AB411c7XY" {
+		t.Errorf("BilibiliBvid: got %q, want %q", job.BilibiliBvid, "BV1AB411c7XY")
+	}
+
+	// Get nonexistent job
+	nilJob, err := store.GetUploadJob(ctx, 99999)
+	if err != nil {
+		t.Fatalf("GetUploadJob (nonexistent): %v", err)
+	}
+	if nilJob != nil {
+		t.Errorf("expected nil for nonexistent job, got %+v", nilJob)
+	}
+}
+
+func TestUploadJobFailed(t *testing.T) {
+	f, err := os.CreateTemp("", "test-upload-job-failed-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID, _ := store.CreateUploadJob(ctx, "test123", "Title", "Desc", "")
+
+	// Mark as failed with error
+	if err := store.UpdateUploadJobStatus(ctx, jobID, "failed", "", "download timeout"); err != nil {
+		t.Fatalf("UpdateUploadJobStatus (failed): %v", err)
+	}
+
+	job, _ := store.GetUploadJob(ctx, jobID)
+	if job.Status != "failed" {
+		t.Errorf("Status: got %q, want %q", job.Status, "failed")
+	}
+	if job.ErrorMessage != "download timeout" {
+		t.Errorf("ErrorMessage: got %q, want %q", job.ErrorMessage, "download timeout")
+	}
+	if job.BilibiliBvid != "" {
+		t.Errorf("BilibiliBvid should be empty, got %q", job.BilibiliBvid)
+	}
+}

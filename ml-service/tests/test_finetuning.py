@@ -234,7 +234,7 @@ class TestLoRAConfig:
         assert "num_train_epochs" in DEFAULT_TRAINING_ARGS
         assert "learning_rate" in DEFAULT_TRAINING_ARGS
         assert "gradient_checkpointing" in DEFAULT_TRAINING_ARGS
-        assert DEFAULT_TRAINING_ARGS["fp16"] is True
+        assert DEFAULT_TRAINING_ARGS["bf16"] is True
 
     def test_target_modules_include_attention(self):
         modules = DEFAULT_LORA_CONFIG["target_modules"]
