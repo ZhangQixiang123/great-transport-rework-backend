@@ -2,91 +2,33 @@
 Auto-Labeler for Competitor Videos
 
 Labels competitor videos based on performance thresholds.
-Uses the same thresholds as BilibiliTracker for consistency.
+Uses the shared thresholds and functions from bilibili_tracker.
 """
 import logging
-from typing import Optional
 
 from ..db.database import Database, CompetitorVideo
+from .bilibili_tracker import (
+    LABEL_THRESHOLDS,
+    calculate_engagement_rate,
+    determine_label,
+)
 
 logger = logging.getLogger(__name__)
 
-# Success label thresholds (matching BilibiliTracker)
-LABEL_THRESHOLDS = {
-    "viral": {
-        "min_views": 1_000_000,
-        "min_engagement_rate": 0.05,  # 5%
-        "min_coins": 10_000,
-    },
-    "successful": {
-        "min_views": 100_000,
-        "min_engagement_rate": 0.03,  # 3%
-    },
-    "standard": {
-        "min_views": 10_000,
-        "min_engagement_rate": 0.01,  # 1%
-        "max_engagement_rate": 0.03,  # 3%
-    },
-    "failed": {
-        "max_views": 10_000,
-        # or engagement_rate < 1%
-    },
-}
+
+def determine_label_for_video(video: CompetitorVideo) -> str:
+    """Determine the success label for a competitor video."""
+    engagement = calculate_engagement_rate(
+        video.views, video.likes, video.coins, video.favorites
+    )
+    return determine_label(video.views, engagement, video.coins)
 
 
-def calculate_engagement_rate(video: CompetitorVideo) -> float:
-    """
-    Calculate engagement rate for a competitor video.
-
-    Formula: (likes + coins + favorites) / views
-
-    Args:
-        video: CompetitorVideo to analyze
-
-    Returns:
-        Engagement rate as a decimal (e.g., 0.05 for 5%)
-    """
-    if video.views <= 0:
-        return 0.0
-
-    total_engagement = video.likes + video.coins + video.favorites
-    return total_engagement / video.views
-
-
-def determine_label(video: CompetitorVideo) -> str:
-    """
-    Determine the success label based on performance metrics.
-
-    Args:
-        video: CompetitorVideo to label
-
-    Returns:
-        Label: 'viral', 'successful', 'standard', or 'failed'
-    """
-    views = video.views
-    coins = video.coins
-    engagement = calculate_engagement_rate(video)
-
-    # Check for viral
-    viral = LABEL_THRESHOLDS["viral"]
-    if (views >= viral["min_views"] and
-        engagement >= viral["min_engagement_rate"] and
-        coins >= viral["min_coins"]):
-        return "viral"
-
-    # Check for successful
-    successful = LABEL_THRESHOLDS["successful"]
-    if views >= successful["min_views"] and engagement >= successful["min_engagement_rate"]:
-        return "successful"
-
-    # Check for standard
-    standard = LABEL_THRESHOLDS["standard"]
-    if (views >= standard["min_views"] and
-        standard["min_engagement_rate"] <= engagement <= standard["max_engagement_rate"]):
-        return "standard"
-
-    # Default to failed
-    return "failed"
+def calculate_video_engagement_rate(video: CompetitorVideo) -> float:
+    """Calculate engagement rate for a competitor video."""
+    return calculate_engagement_rate(
+        video.views, video.likes, video.coins, video.favorites
+    )
 
 
 class Labeler:
@@ -111,12 +53,12 @@ class Labeler:
         Returns:
             The assigned label
         """
-        label = determine_label(video)
+        label = determine_label_for_video(video)
 
         # Update in database
         self.db.update_competitor_video_label(video.bvid, label)
 
-        engagement = calculate_engagement_rate(video)
+        engagement = calculate_video_engagement_rate(video)
         logger.info(
             f"Labeled {video.bvid} as '{label}' "
             f"(views={video.views:,}, engagement={engagement:.2%}, coins={video.coins:,})"
@@ -190,7 +132,7 @@ class Labeler:
         for video in videos:
             try:
                 old_label = video.label
-                new_label = determine_label(video)
+                new_label = determine_label_for_video(video)
 
                 if old_label == new_label:
                     results["unchanged"] += 1

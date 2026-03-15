@@ -11,10 +11,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .models import YouTubeCandidate
+from ..config import YOUTUBE_API_KEY
 
 logger = logging.getLogger(__name__)
-
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U")
 
 
 def _parse_duration(duration_str: str) -> int:

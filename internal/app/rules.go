@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -52,11 +51,6 @@ func (e *RuleEngine) Evaluate(ctx context.Context, candidate VideoCandidate) (*R
 	if err != nil {
 		return nil, err
 	}
-
-	// Sort by priority (higher first) - already done by ListActiveRules
-	sort.Slice(rules, func(i, j int) bool {
-		return rules[i].Priority > rules[j].Priority
-	})
 
 	for _, rule := range rules {
 		passed, reason := e.evaluateRule(rule, candidate)
@@ -133,29 +127,54 @@ func (e *RuleEngine) evaluateRule(rule FilterRule, candidate VideoCandidate) (bo
 	}
 }
 
+// getNumericField returns the numeric value of a candidate field, and whether the field is known.
+func getNumericField(field string, candidate VideoCandidate) (float64, bool) {
+	switch field {
+	case "view_count":
+		return float64(candidate.ViewCount), true
+	case "like_count":
+		return float64(candidate.LikeCount), true
+	case "comment_count":
+		return float64(candidate.CommentCount), true
+	case "duration_seconds":
+		return float64(candidate.DurationSeconds), true
+	case "view_velocity":
+		return candidate.ViewVelocity, true
+	case "engagement_rate":
+		return candidate.EngagementRate, true
+	default:
+		return 0, false
+	}
+}
+
+// getStringField returns the string value of a candidate field, and whether the field is known.
+func getStringField(field string, candidate VideoCandidate) (string, bool) {
+	switch field {
+	case "category":
+		return candidate.Category, true
+	case "language":
+		return candidate.Language, true
+	case "channel_id":
+		return candidate.ChannelID, true
+	case "title":
+		return candidate.Title, true
+	case "description":
+		return candidate.Description, true
+	default:
+		return "", false
+	}
+}
+
 // evaluateMin checks if a numeric field meets minimum threshold.
 func (e *RuleEngine) evaluateMin(rule FilterRule, candidate VideoCandidate) (bool, string) {
 	threshold, err := strconv.ParseFloat(rule.Value, 64)
 	if err != nil {
-		return true, "" // Invalid threshold, pass
+		return true, ""
 	}
 
-	var actual float64
-	switch rule.Field {
-	case "view_count":
-		actual = float64(candidate.ViewCount)
-	case "like_count":
-		actual = float64(candidate.LikeCount)
-	case "comment_count":
-		actual = float64(candidate.CommentCount)
-	case "duration_seconds":
-		actual = float64(candidate.DurationSeconds)
-	case "view_velocity":
-		actual = candidate.ViewVelocity
-	case "engagement_rate":
-		actual = candidate.EngagementRate
-	default:
-		return true, "" // Unknown field, pass
+	actual, ok := getNumericField(rule.Field, candidate)
+	if !ok {
+		return true, ""
 	}
 
 	if actual < threshold {
@@ -168,25 +187,12 @@ func (e *RuleEngine) evaluateMin(rule FilterRule, candidate VideoCandidate) (boo
 func (e *RuleEngine) evaluateMax(rule FilterRule, candidate VideoCandidate) (bool, string) {
 	threshold, err := strconv.ParseFloat(rule.Value, 64)
 	if err != nil {
-		return true, "" // Invalid threshold, pass
+		return true, ""
 	}
 
-	var actual float64
-	switch rule.Field {
-	case "view_count":
-		actual = float64(candidate.ViewCount)
-	case "like_count":
-		actual = float64(candidate.LikeCount)
-	case "comment_count":
-		actual = float64(candidate.CommentCount)
-	case "duration_seconds":
-		actual = float64(candidate.DurationSeconds)
-	case "view_velocity":
-		actual = candidate.ViewVelocity
-	case "engagement_rate":
-		actual = candidate.EngagementRate
-	default:
-		return true, "" // Unknown field, pass
+	actual, ok := getNumericField(rule.Field, candidate)
+	if !ok {
+		return true, ""
 	}
 
 	if actual > threshold {
@@ -199,19 +205,12 @@ func (e *RuleEngine) evaluateMax(rule FilterRule, candidate VideoCandidate) (boo
 func (e *RuleEngine) evaluateBlocklist(rule FilterRule, candidate VideoCandidate) (bool, string) {
 	var blocklist []string
 	if err := json.Unmarshal([]byte(rule.Value), &blocklist); err != nil {
-		return true, "" // Invalid blocklist, pass
+		return true, ""
 	}
 
-	var fieldValue string
-	switch rule.Field {
-	case "category":
-		fieldValue = candidate.Category
-	case "language":
-		fieldValue = candidate.Language
-	case "channel_id":
-		fieldValue = candidate.ChannelID
-	default:
-		return true, "" // Unknown field, pass
+	fieldValue, ok := getStringField(rule.Field, candidate)
+	if !ok {
+		return true, ""
 	}
 
 	fieldLower := strings.ToLower(fieldValue)
@@ -227,23 +226,16 @@ func (e *RuleEngine) evaluateBlocklist(rule FilterRule, candidate VideoCandidate
 func (e *RuleEngine) evaluateAllowlist(rule FilterRule, candidate VideoCandidate) (bool, string) {
 	var allowlist []string
 	if err := json.Unmarshal([]byte(rule.Value), &allowlist); err != nil {
-		return true, "" // Invalid allowlist, pass
+		return true, ""
 	}
 
 	if len(allowlist) == 0 {
-		return true, "" // Empty allowlist means allow all
+		return true, ""
 	}
 
-	var fieldValue string
-	switch rule.Field {
-	case "category":
-		fieldValue = candidate.Category
-	case "language":
-		fieldValue = candidate.Language
-	case "channel_id":
-		fieldValue = candidate.ChannelID
-	default:
-		return true, "" // Unknown field, pass
+	fieldValue, ok := getStringField(rule.Field, candidate)
+	if !ok {
+		return true, ""
 	}
 
 	fieldLower := strings.ToLower(fieldValue)
@@ -259,19 +251,12 @@ func (e *RuleEngine) evaluateAllowlist(rule FilterRule, candidate VideoCandidate
 func (e *RuleEngine) evaluateRegex(rule FilterRule, candidate VideoCandidate) (bool, string) {
 	re, err := regexp.Compile(rule.Value)
 	if err != nil {
-		return true, "" // Invalid regex, pass
+		return true, ""
 	}
 
-	var fieldValue string
-	switch rule.Field {
-	case "title":
-		fieldValue = candidate.Title
-	case "description":
-		fieldValue = candidate.Description
-	case "category":
-		fieldValue = candidate.Category
-	default:
-		return true, "" // Unknown field, pass
+	fieldValue, ok := getStringField(rule.Field, candidate)
+	if !ok {
+		return true, ""
 	}
 
 	if re.MatchString(fieldValue) {

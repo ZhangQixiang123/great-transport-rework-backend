@@ -282,22 +282,19 @@ ON CONFLICT(channel_id) DO UPDATE SET
 	return err
 }
 
-// GetChannel retrieves a channel by ID.
-func (s *SQLiteStore) GetChannel(ctx context.Context, channelID string) (*Channel, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT channel_id, name, url, subscriber_count, video_count, last_scanned_at, scan_frequency_hours, is_active, created_at
-FROM channels WHERE channel_id = ?`, channelID)
+// scanner is an interface matching *sql.Row and *sql.Rows for scanning.
+type scanner interface {
+	Scan(dest ...interface{}) error
+}
 
+// scanChannel scans a channel row into a Channel struct.
+func scanChannel(row scanner) (Channel, error) {
 	var ch Channel
 	var name, lastScanned sql.NullString
 	var subCount, vidCount, scanFreq sql.NullInt64
 	var isActive int
-	err := row.Scan(&ch.ChannelID, &name, &ch.URL, &subCount, &vidCount, &lastScanned, &scanFreq, &isActive, &ch.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
+	if err := row.Scan(&ch.ChannelID, &name, &ch.URL, &subCount, &vidCount, &lastScanned, &scanFreq, &isActive, &ch.CreatedAt); err != nil {
+		return ch, err
 	}
 	ch.Name = name.String
 	ch.SubscriberCount = int(subCount.Int64)
@@ -310,6 +307,22 @@ FROM channels WHERE channel_id = ?`, channelID)
 	if lastScanned.Valid {
 		t, _ := time.Parse(time.RFC3339, lastScanned.String)
 		ch.LastScannedAt = &t
+	}
+	return ch, nil
+}
+
+// GetChannel retrieves a channel by ID.
+func (s *SQLiteStore) GetChannel(ctx context.Context, channelID string) (*Channel, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT channel_id, name, url, subscriber_count, video_count, last_scanned_at, scan_frequency_hours, is_active, created_at
+FROM channels WHERE channel_id = ?`, channelID)
+
+	ch, err := scanChannel(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &ch, nil
 }
@@ -326,24 +339,9 @@ FROM channels WHERE is_active = 1 ORDER BY created_at`)
 
 	var channels []Channel
 	for rows.Next() {
-		var ch Channel
-		var name, lastScanned sql.NullString
-		var subCount, vidCount, scanFreq sql.NullInt64
-		var isActive int
-		if err := rows.Scan(&ch.ChannelID, &name, &ch.URL, &subCount, &vidCount, &lastScanned, &scanFreq, &isActive, &ch.CreatedAt); err != nil {
+		ch, err := scanChannel(rows)
+		if err != nil {
 			return nil, err
-		}
-		ch.Name = name.String
-		ch.SubscriberCount = int(subCount.Int64)
-		ch.VideoCount = int(vidCount.Int64)
-		ch.ScanFrequencyHours = int(scanFreq.Int64)
-		if ch.ScanFrequencyHours == 0 {
-			ch.ScanFrequencyHours = 6
-		}
-		ch.IsActive = isActive == 1
-		if lastScanned.Valid {
-			t, _ := time.Parse(time.RFC3339, lastScanned.String)
-			ch.LastScannedAt = &t
 		}
 		channels = append(channels, ch)
 	}
@@ -388,25 +386,17 @@ ON CONFLICT(video_id) DO UPDATE SET
 	return err
 }
 
-// GetCandidate retrieves a video candidate by ID.
-func (s *SQLiteStore) GetCandidate(ctx context.Context, videoID string) (*VideoCandidate, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT video_id, channel_id, title, description, duration_seconds, view_count, like_count, comment_count, published_at, discovered_at, thumbnail_url, tags, category, language, view_velocity, engagement_rate
-FROM video_candidates WHERE video_id = ?`, videoID)
-
+// scanCandidate scans a single candidate row.
+func scanCandidate(row scanner) (VideoCandidate, error) {
 	var vc VideoCandidate
 	var title, desc, thumbURL, tagsJSON, category, language sql.NullString
 	var publishedAt sql.NullString
 	var duration, views, likes, comments sql.NullInt64
 	var velocity, engagement sql.NullFloat64
 
-	err := row.Scan(&vc.VideoID, &vc.ChannelID, &title, &desc, &duration, &views, &likes, &comments,
-		&publishedAt, &vc.DiscoveredAt, &thumbURL, &tagsJSON, &category, &language, &velocity, &engagement)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
+	if err := row.Scan(&vc.VideoID, &vc.ChannelID, &title, &desc, &duration, &views, &likes, &comments,
+		&publishedAt, &vc.DiscoveredAt, &thumbURL, &tagsJSON, &category, &language, &velocity, &engagement); err != nil {
+		return vc, err
 	}
 	vc.Title = title.String
 	vc.Description = desc.String
@@ -425,6 +415,22 @@ FROM video_candidates WHERE video_id = ?`, videoID)
 	}
 	if tagsJSON.String != "" {
 		_ = json.Unmarshal([]byte(tagsJSON.String), &vc.Tags)
+	}
+	return vc, nil
+}
+
+// GetCandidate retrieves a video candidate by ID.
+func (s *SQLiteStore) GetCandidate(ctx context.Context, videoID string) (*VideoCandidate, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT video_id, channel_id, title, description, duration_seconds, view_count, like_count, comment_count, published_at, discovered_at, thumbnail_url, tags, category, language, view_velocity, engagement_rate
+FROM video_candidates WHERE video_id = ?`, videoID)
+
+	vc, err := scanCandidate(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &vc, nil
 }
@@ -468,33 +474,9 @@ UPDATE video_candidates SET view_count = ?, like_count = ?, comment_count = ? WH
 func scanCandidates(rows *sql.Rows) ([]VideoCandidate, error) {
 	var candidates []VideoCandidate
 	for rows.Next() {
-		var vc VideoCandidate
-		var title, desc, thumbURL, tagsJSON, category, language sql.NullString
-		var publishedAt sql.NullString
-		var duration, views, likes, comments sql.NullInt64
-		var velocity, engagement sql.NullFloat64
-
-		if err := rows.Scan(&vc.VideoID, &vc.ChannelID, &title, &desc, &duration, &views, &likes, &comments,
-			&publishedAt, &vc.DiscoveredAt, &thumbURL, &tagsJSON, &category, &language, &velocity, &engagement); err != nil {
+		vc, err := scanCandidate(rows)
+		if err != nil {
 			return nil, err
-		}
-		vc.Title = title.String
-		vc.Description = desc.String
-		vc.DurationSeconds = int(duration.Int64)
-		vc.ViewCount = int(views.Int64)
-		vc.LikeCount = int(likes.Int64)
-		vc.CommentCount = int(comments.Int64)
-		vc.ThumbnailURL = thumbURL.String
-		vc.Category = category.String
-		vc.Language = language.String
-		vc.ViewVelocity = velocity.Float64
-		vc.EngagementRate = engagement.Float64
-		if publishedAt.Valid {
-			t, _ := time.Parse(time.RFC3339, publishedAt.String)
-			vc.PublishedAt = &t
-		}
-		if tagsJSON.String != "" {
-			_ = json.Unmarshal([]byte(tagsJSON.String), &vc.Tags)
 		}
 		candidates = append(candidates, vc)
 	}
@@ -930,56 +912,6 @@ LIMIT ?`, limit)
 }
 
 // Phase 3B: Competitor Monitoring Methods
-
-// CompetitorChannel represents a Bilibili transporter channel to monitor.
-type CompetitorChannel struct {
-	BilibiliUID   string
-	Name          string
-	Description   string
-	FollowerCount int
-	VideoCount    int
-	AddedAt       time.Time
-	IsActive      bool
-}
-
-// CompetitorVideo represents a video from a competitor channel.
-type CompetitorVideo struct {
-	Bvid            string
-	BilibiliUID     string
-	Title           string
-	Description     string
-	Duration        int
-	Views           int
-	Likes           int
-	Coins           int
-	Favorites       int
-	Shares          int
-	Danmaku         int
-	Comments        int
-	PublishTime     *time.Time
-	CollectedAt     time.Time
-	YoutubeSourceID string
-	Label           string
-}
-
-// CompetitorStats holds aggregate statistics about competitor data.
-type CompetitorStats struct {
-	TotalChannels   int
-	ActiveChannels  int
-	TotalVideos     int
-	LabeledVideos   int
-	UnlabeledVideos int
-}
-
-// TrainingDataSummary holds counts of videos by label.
-type TrainingDataSummary struct {
-	Viral      int
-	Successful int
-	Standard   int
-	Failed     int
-	Unlabeled  int
-	Total      int
-}
 
 // AddCompetitorChannel inserts a new competitor channel to monitor.
 func (s *SQLiteStore) AddCompetitorChannel(ctx context.Context, ch CompetitorChannel) error {

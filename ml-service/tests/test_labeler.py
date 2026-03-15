@@ -5,11 +5,11 @@ import pytest
 from datetime import datetime
 
 from app.collectors.labeler import (
-    calculate_engagement_rate,
-    determine_label,
+    calculate_video_engagement_rate,
+    determine_label_for_video,
     Labeler,
-    LABEL_THRESHOLDS,
 )
+from app.collectors.bilibili_tracker import LABEL_THRESHOLDS
 from app.db.database import Database, CompetitorChannel, CompetitorVideo
 
 
@@ -41,20 +41,20 @@ class TestCalculateEngagementRate:
     def test_normal_engagement(self):
         """Test normal engagement rate calculation."""
         video = make_video(views=100000, likes=3000, coins=1000, favorites=500)
-        rate = calculate_engagement_rate(video)
+        rate = calculate_video_engagement_rate(video)
         # (3000 + 1000 + 500) / 100000 = 0.045
         assert abs(rate - 0.045) < 0.001
 
     def test_zero_views_returns_zero(self):
         """Test that zero views returns zero engagement."""
         video = make_video(views=0, likes=100, coins=50, favorites=20)
-        rate = calculate_engagement_rate(video)
+        rate = calculate_video_engagement_rate(video)
         assert rate == 0.0
 
     def test_high_engagement(self):
         """Test high engagement rate."""
         video = make_video(views=10000, likes=1000, coins=500, favorites=500)
-        rate = calculate_engagement_rate(video)
+        rate = calculate_video_engagement_rate(video)
         # (1000 + 500 + 500) / 10000 = 0.20
         assert abs(rate - 0.20) < 0.001
 
@@ -66,34 +66,34 @@ class TestDetermineLabel:
         """Test viral label assignment."""
         # Viral: >1M views, >5% engagement, >10K coins
         video = make_video(views=2000000, likes=100000, coins=50000, favorites=30000)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         assert label == "viral"
 
     def test_successful_label(self):
         """Test successful label assignment."""
         # Successful: >100K views, >3% engagement
         video = make_video(views=200000, likes=6000, coins=2000, favorites=1000)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         assert label == "successful"
 
     def test_standard_label(self):
         """Test standard label assignment."""
         # Standard: >10K views, 1-3% engagement
         video = make_video(views=50000, likes=500, coins=200, favorites=100)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         # (500 + 200 + 100) / 50000 = 0.016 = 1.6%
         assert label == "standard"
 
     def test_failed_label_low_views(self):
         """Test failed label for low views."""
         video = make_video(views=5000, likes=100, coins=50, favorites=20)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         assert label == "failed"
 
     def test_failed_label_low_engagement(self):
         """Test failed label for low engagement."""
         video = make_video(views=50000, likes=100, coins=50, favorites=30)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         # (100 + 50 + 30) / 50000 = 0.0036 = 0.36%
         assert label == "failed"
 
@@ -101,7 +101,7 @@ class TestDetermineLabel:
         """Test that high views without enough coins is not viral."""
         # High views and engagement but not enough coins
         video = make_video(views=1500000, likes=80000, coins=5000, favorites=30000)
-        label = determine_label(video)
+        label = determine_label_for_video(video)
         # Not viral because coins < 10K, but successful because >100K views and >3% engagement
         assert label == "successful"
 

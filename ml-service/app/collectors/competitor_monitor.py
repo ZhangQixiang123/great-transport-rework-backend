@@ -14,7 +14,7 @@ from typing import Optional, List, Tuple
 from bilibili_api import user, video, exceptions
 
 from ..db.database import Database, CompetitorChannel, CompetitorVideo
-from .bilibili_tracker import RateLimiter
+from .bilibili_tracker import RateLimiter, fetch_video_info
 
 logger = logging.getLogger(__name__)
 
@@ -117,42 +117,33 @@ class CompetitorMonitor:
         """
         Fetch detailed video statistics.
 
+        Uses the shared fetch_video_info helper, then extracts stats and metadata.
+
         Args:
             bvid: Bilibili video ID
 
         Returns:
             Dict with video stats or None if not found
         """
-        try:
-            v = video.Video(bvid=bvid)
-            info = await self.rate_limiter.execute_with_retry(v.get_info())
+        info = await fetch_video_info(self.rate_limiter, bvid)
+        if info is None:
+            return None
 
-            if info is None:
-                return None
-
-            stat = info.get("stat", {})
-            return {
-                "bvid": bvid,
-                "title": info.get("title", ""),
-                "description": info.get("desc", ""),
-                "duration": info.get("duration", 0),
-                "views": stat.get("view", 0),
-                "likes": stat.get("like", 0),
-                "coins": stat.get("coin", 0),
-                "favorites": stat.get("favorite", 0),
-                "shares": stat.get("share", 0),
-                "danmaku": stat.get("danmaku", 0),
-                "comments": stat.get("reply", 0),
-                "publish_time": datetime.fromtimestamp(info.get("pubdate", 0)) if info.get("pubdate") else None,
-            }
-        except exceptions.ResponseCodeException as e:
-            if e.code in (-404, 62002):  # Video not found or deleted
-                logger.warning(f"Video {bvid} not found or deleted")
-                return None
-            raise
-        except Exception as e:
-            logger.error(f"Error getting video stats for {bvid}: {e}")
-            raise
+        stat = info.get("stat", {})
+        return {
+            "bvid": bvid,
+            "title": info.get("title", ""),
+            "description": info.get("desc", ""),
+            "duration": info.get("duration", 0),
+            "views": stat.get("view", 0),
+            "likes": stat.get("like", 0),
+            "coins": stat.get("coin", 0),
+            "favorites": stat.get("favorite", 0),
+            "shares": stat.get("share", 0),
+            "danmaku": stat.get("danmaku", 0),
+            "comments": stat.get("reply", 0),
+            "publish_time": datetime.fromtimestamp(info.get("pubdate", 0)) if info.get("pubdate") else None,
+        }
 
     async def get_recent_videos(self, uid: str, count: int = 100) -> List[dict]:
         """

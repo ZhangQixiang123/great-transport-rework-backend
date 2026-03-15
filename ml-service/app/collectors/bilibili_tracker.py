@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Checkpoint hours for tracking
 CHECKPOINTS = [1, 6, 24, 48, 168, 720]  # 1h, 6h, 24h, 48h, 7d, 30d
 
-# Success label thresholds
+# Success label thresholds (shared by labeler.py)
 LABEL_THRESHOLDS = {
     "viral": {
         "min_views": 1_000_000,
@@ -41,6 +41,42 @@ LABEL_THRESHOLDS = {
         # or engagement_rate < 1%
     },
 }
+
+
+def calculate_engagement_rate(views: int, likes: int, coins: int, favorites: int) -> float:
+    """Calculate engagement rate: (likes + coins + favorites) / views."""
+    if views <= 0:
+        return 0.0
+    return (likes + coins + favorites) / views
+
+
+def determine_label(views: int, engagement: float, coins: int) -> str:
+    """Determine the success label based on performance metrics.
+
+    Args:
+        views: View count.
+        engagement: Engagement rate as a decimal.
+        coins: Coin count.
+
+    Returns:
+        Label: 'viral', 'successful', 'standard', or 'failed'
+    """
+    viral = LABEL_THRESHOLDS["viral"]
+    if (views >= viral["min_views"] and
+        engagement >= viral["min_engagement_rate"] and
+        coins >= viral["min_coins"]):
+        return "viral"
+
+    successful = LABEL_THRESHOLDS["successful"]
+    if views >= successful["min_views"] and engagement >= successful["min_engagement_rate"]:
+        return "successful"
+
+    standard = LABEL_THRESHOLDS["standard"]
+    if (views >= standard["min_views"] and
+        standard["min_engagement_rate"] <= engagement <= standard["max_engagement_rate"]):
+        return "standard"
+
+    return "failed"
 
 
 @dataclass
@@ -100,6 +136,43 @@ class RateLimiter:
         raise last_error
 
 
+async def fetch_video_info(rate_limiter: RateLimiter, bvid: str) -> Optional[Dict[str, Any]]:
+    """Fetch raw video info from Bilibili API.
+
+    Shared by BilibiliTracker and CompetitorMonitor.
+
+    Returns:
+        Raw info dict from bilibili-api, or None if video not found.
+    """
+    try:
+        v = video.Video(bvid=bvid)
+        info = await rate_limiter.execute_with_retry(v.get_info())
+        return info
+    except exceptions.ResponseCodeException as e:
+        if e.code in (-404, 62002):
+            logger.warning(f"Video {bvid} not found or deleted")
+            return None
+        raise
+    except Exception as e:
+        logger.error(f"Error getting info for {bvid}: {e}")
+        raise
+
+
+def stats_from_info(bvid: str, info: Dict[str, Any]) -> BilibiliVideoStats:
+    """Extract BilibiliVideoStats from a raw info dict."""
+    stat = info.get("stat", {})
+    return BilibiliVideoStats(
+        bvid=bvid,
+        views=stat.get("view", 0),
+        likes=stat.get("like", 0),
+        coins=stat.get("coin", 0),
+        favorites=stat.get("favorite", 0),
+        shares=stat.get("share", 0),
+        danmaku=stat.get("danmaku", 0),
+        comments=stat.get("reply", 0),
+    )
+
+
 class BilibiliTracker:
     """Tracks Bilibili video performance metrics."""
 
@@ -123,32 +196,10 @@ class BilibiliTracker:
         Returns:
             Video statistics or None if video not found.
         """
-        try:
-            v = video.Video(bvid=bvid)
-            info = await self.rate_limiter.execute_with_retry(v.get_info())
-
-            if info is None:
-                return None
-
-            stat = info.get("stat", {})
-            return BilibiliVideoStats(
-                bvid=bvid,
-                views=stat.get("view", 0),
-                likes=stat.get("like", 0),
-                coins=stat.get("coin", 0),
-                favorites=stat.get("favorite", 0),
-                shares=stat.get("share", 0),
-                danmaku=stat.get("danmaku", 0),
-                comments=stat.get("reply", 0),
-            )
-        except exceptions.ResponseCodeException as e:
-            if e.code in (-404, 62002):  # Video not found or deleted
-                logger.warning(f"Video {bvid} not found or deleted")
-                return None
-            raise
-        except Exception as e:
-            logger.error(f"Error getting stats for {bvid}: {e}")
-            raise
+        info = await fetch_video_info(self.rate_limiter, bvid)
+        if info is None:
+            return None
+        return stats_from_info(bvid, info)
 
     def calculate_metrics(
         self,
@@ -171,9 +222,9 @@ class BilibiliTracker:
         hours_since_upload = checkpoint_hours
         view_velocity = stats.views / max(hours_since_upload, 1)
 
-        # Calculate engagement rate: (likes + coins + favorites) / views
-        total_engagement = stats.likes + stats.coins + stats.favorites
-        engagement_rate = total_engagement / max(stats.views, 1)
+        engagement_rate = calculate_engagement_rate(
+            stats.views, stats.likes, stats.coins, stats.favorites
+        )
 
         return UploadPerformance(
             id=None,
@@ -228,30 +279,7 @@ class BilibiliTracker:
         Returns:
             Label: 'viral', 'successful', 'standard', or 'failed'
         """
-        views = perf.views
-        engagement = perf.engagement_rate
-        coins = perf.coins
-
-        # Check for viral
-        viral = LABEL_THRESHOLDS["viral"]
-        if (views >= viral["min_views"] and
-            engagement >= viral["min_engagement_rate"] and
-            coins >= viral["min_coins"]):
-            return "viral"
-
-        # Check for successful
-        successful = LABEL_THRESHOLDS["successful"]
-        if views >= successful["min_views"] and engagement >= successful["min_engagement_rate"]:
-            return "successful"
-
-        # Check for standard
-        standard = LABEL_THRESHOLDS["standard"]
-        if (views >= standard["min_views"] and
-            standard["min_engagement_rate"] <= engagement <= standard["max_engagement_rate"]):
-            return "standard"
-
-        # Default to failed
-        return "failed"
+        return determine_label(perf.views, perf.engagement_rate, perf.coins)
 
     async def auto_label(self, upload: Upload) -> Optional[UploadOutcome]:
         """

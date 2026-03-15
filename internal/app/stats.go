@@ -20,27 +20,6 @@ func (s *StatsService) GetOverallStats(ctx context.Context) (*UploadStats, error
 	return s.store.GetUploadStats(ctx)
 }
 
-// GetPerformanceSummary returns a summary of performance metrics.
-func (s *StatsService) GetPerformanceSummary(ctx context.Context) (map[string]interface{}, error) {
-	stats, err := s.store.GetUploadStats(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	summary := map[string]interface{}{
-		"total_uploads":            stats.TotalUploads,
-		"uploads_with_bvid":        stats.UploadsWithBvid,
-		"uploads_with_performance": stats.UploadsWithPerformance,
-		"uploads_by_label":         stats.UploadsByLabel,
-		"avg_views":                stats.AvgViews,
-		"avg_likes":                stats.AvgLikes,
-		"avg_coins":                stats.AvgCoins,
-		"avg_engagement_rate":      stats.AvgEngagementRate,
-	}
-
-	return summary, nil
-}
-
 // GetRecentUploads returns recent uploads with their performance.
 func (s *StatsService) GetRecentUploads(ctx context.Context, limit int) ([]UploadWithPerformance, error) {
 	return s.store.ListRecentUploadsWithPerformance(ctx, limit)
@@ -80,11 +59,3 @@ type UploadDetails struct {
 	Outcome     *UploadOutcome
 }
 
-// GetLabelDistribution returns the distribution of success labels.
-func (s *StatsService) GetLabelDistribution(ctx context.Context) (map[string]int, error) {
-	stats, err := s.store.GetUploadStats(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return stats.UploadsByLabel, nil
-}

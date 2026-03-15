@@ -1,7 +1,8 @@
 """
-Round 2 collection: channels with high YouTube ID reference rates.
-Collect videos, label, then enrich with YouTube stats.
+Batch collection script: add transporter channels and collect videos.
+Supports multiple rounds of collection via --round argument.
 """
+import argparse
 import asyncio
 import logging
 import sys
@@ -12,18 +13,22 @@ from app.db.database import Database
 from app.collectors.competitor_monitor import CompetitorMonitor
 from app.collectors.labeler import Labeler
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("collection_round2_log.txt", encoding="utf-8"),
-    ],
-)
-logger = logging.getLogger(__name__)
+# Round 1: Confirmed independent YouTube transporter channels
+ROUND_1_CHANNELS = [
+    ("375797865", "试炼与梦想", "entertainment/dating"),
+    ("4390568", "瑶锅不是锅", "gaming (PewDiePie etc.)"),
+    ("544112908", "难绷funny", "comedy/viral clips"),
+    ("677245745", "油管心理咨询搬运", "psychology/counseling"),
+    ("662792114", "苜蓿在你的", "mixed YouTube transport"),
+    ("325069537", "Stefanie英语日记", "English learning vlogs"),
+    ("3546858064448344", "TED听力精选课", "TED/English learning"),
+    ("17198256", "佐倉熊", "Japanese idol content"),
+    ("1121309703", "YouTube外语大世界", "English learning"),
+    ("50944796", "早学笔记", "English vlog transport"),
+]
 
-# New channels with high YouTube ID rates (>90%, 200+ videos)
-NEW_CHANNELS = [
+# Round 2: Channels with high YouTube ID reference rates
+ROUND_2_CHANNELS = [
     ("121473911", "wdygggh", "32523 videos, 100% YT rate"),
     ("40291327", "unknown-large", "30088 videos, 67% YT rate"),
     ("1263732318", "unknown-1", "14656 videos, 100% YT rate"),
@@ -47,12 +52,28 @@ NEW_CHANNELS = [
     ("10523655", "unknown-15", "103 videos, 87% YT rate"),
 ]
 
+ROUNDS = {
+    1: ("Round 1", ROUND_1_CHANNELS, "collection_log.txt"),
+    2: ("Round 2", ROUND_2_CHANNELS, "collection_round2_log.txt"),
+}
+
 DB_PATH = "data.db"
 VIDEOS_PER_CHANNEL = 300
 
 
-async def main():
+async def run_collection(round_num: int):
+    round_name, channels, log_file = ROUNDS[round_num]
     start_time = time.time()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file, encoding="utf-8"),
+        ],
+    )
+    logger = logging.getLogger(__name__)
 
     with Database(DB_PATH) as db:
         db.ensure_competitor_tables()
@@ -60,10 +81,10 @@ async def main():
 
         # Phase 1: Add channels
         logger.info("=" * 60)
-        logger.info(f"ROUND 2: Adding {len(NEW_CHANNELS)} new channels")
+        logger.info(f"{round_name}: Adding {len(channels)} channels")
         logger.info("=" * 60)
 
-        for uid, name, info in NEW_CHANNELS:
+        for uid, name, info in channels:
             logger.info(f"Adding: {name} ({uid}) [{info}]")
             try:
                 channel = await monitor.get_channel_info(uid)
@@ -84,8 +105,8 @@ async def main():
         total_collected = 0
         total_with_yt = 0
 
-        for uid, name, info in NEW_CHANNELS:
-            logger.info(f"\nCollecting from: {uid}")
+        for uid, name, info in channels:
+            logger.info(f"\nCollecting from: {name} ({uid})")
             try:
                 collected, with_yt = await monitor.collect_channel(uid, VIDEOS_PER_CHANNEL)
                 total_collected += collected
@@ -97,7 +118,7 @@ async def main():
         # Phase 3: Label
         logger.info("")
         logger.info("=" * 60)
-        logger.info("Labeling new videos")
+        logger.info("Labeling videos")
         logger.info("=" * 60)
 
         labeler = Labeler(db)
@@ -110,18 +131,28 @@ async def main():
         elapsed = time.time() - start_time
         logger.info("")
         logger.info("=" * 60)
-        logger.info("ROUND 2 COMPLETE")
+        logger.info(f"{round_name} COMPLETE")
         logger.info("=" * 60)
-        logger.info(f"New videos collected: {total_collected}")
+        logger.info(f"Videos collected: {total_collected}")
         logger.info(f"With YouTube source: {total_with_yt}")
         logger.info(f"Time: {elapsed/60:.1f} minutes")
+        logger.info(f"Database: {DB_PATH}")
 
         summary = db.get_training_data_summary()
-        logger.info(f"\nTotal training data:")
+        logger.info(f"\nTraining data summary:")
         logger.info(f"  Total: {summary.get('total', 0)}")
         for label in ["viral", "successful", "standard", "failed", "unlabeled"]:
             logger.info(f"  {label}: {summary.get(label, 0)}")
 
+        total_labeled = summary.get('total', 0)
+        if total_labeled >= 50:
+            logger.info(f"\n  READY TO TRAIN! Run:")
+            logger.info(f"  python -m app.cli --db-path {DB_PATH} train --gpu")
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Collect videos from Bilibili transporter channels")
+    parser.add_argument("--round", type=int, choices=list(ROUNDS.keys()), default=1,
+                        help="Collection round (1 or 2)")
+    args = parser.parse_args()
+    asyncio.run(run_collection(args.round))

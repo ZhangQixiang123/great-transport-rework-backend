@@ -130,6 +130,56 @@ type UploadJob struct {
 	UpdatedAt    time.Time
 }
 
+// CompetitorChannel represents a Bilibili transporter channel to monitor.
+type CompetitorChannel struct {
+	BilibiliUID   string
+	Name          string
+	Description   string
+	FollowerCount int
+	VideoCount    int
+	AddedAt       time.Time
+	IsActive      bool
+}
+
+// CompetitorVideo represents a video from a competitor channel.
+type CompetitorVideo struct {
+	Bvid            string
+	BilibiliUID     string
+	Title           string
+	Description     string
+	Duration        int
+	Views           int
+	Likes           int
+	Coins           int
+	Favorites       int
+	Shares          int
+	Danmaku         int
+	Comments        int
+	PublishTime     *time.Time
+	CollectedAt     time.Time
+	YoutubeSourceID string
+	Label           string
+}
+
+// CompetitorStats holds aggregate statistics about competitor data.
+type CompetitorStats struct {
+	TotalChannels   int
+	ActiveChannels  int
+	TotalVideos     int
+	LabeledVideos   int
+	UnlabeledVideos int
+}
+
+// TrainingDataSummary holds counts of videos by label.
+type TrainingDataSummary struct {
+	Viral      int
+	Successful int
+	Standard   int
+	Failed     int
+	Unlabeled  int
+	Total      int
+}
+
 // UploadWithPerformance combines upload info with latest performance data.
 type UploadWithPerformance struct {
 	VideoID          string

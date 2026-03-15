@@ -12,7 +12,9 @@ from datetime import datetime
 
 import httpx
 
-YOUTUBE_API_KEY = "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U"
+from app.config import YOUTUBE_API_KEY
+from app.discovery.youtube_search import _parse_duration as parse_duration
+
 DB_PATH = "data.db"
 BATCH_SIZE = 50  # YouTube API allows up to 50 IDs per request
 
@@ -41,18 +43,6 @@ def ensure_youtube_table(conn: sqlite3.Connection):
         ON youtube_stats(bvid)
     """)
     conn.commit()
-
-
-def parse_duration(duration_str: str) -> int:
-    """Parse ISO 8601 duration (PT1H2M3S) to seconds."""
-    import re
-    match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str or '')
-    if not match:
-        return 0
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = int(match.group(3) or 0)
-    return hours * 3600 + minutes * 60 + seconds
 
 
 def fetch_video_stats(client: httpx.Client, video_ids: list[str]) -> dict:

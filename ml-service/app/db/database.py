@@ -117,6 +117,49 @@ class Database:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    @staticmethod
+    def _row_to_upload(row) -> Upload:
+        """Convert a database row to an Upload dataclass."""
+        uploaded_at = row["uploaded_at"]
+        if isinstance(uploaded_at, str):
+            uploaded_at = datetime.fromisoformat(uploaded_at.replace("Z", "+00:00"))
+        return Upload(
+            video_id=row["video_id"],
+            channel_id=row["channel_id"],
+            bilibili_bvid=row["bilibili_bvid"],
+            uploaded_at=uploaded_at,
+        )
+
+    @staticmethod
+    def _row_to_competitor_video(row) -> CompetitorVideo:
+        """Convert a database row to a CompetitorVideo dataclass."""
+        publish_time = row["publish_time"]
+        if publish_time and isinstance(publish_time, str):
+            publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
+
+        collected_at = row["collected_at"]
+        if isinstance(collected_at, str):
+            collected_at = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+
+        return CompetitorVideo(
+            bvid=row["bvid"],
+            bilibili_uid=row["bilibili_uid"],
+            title=row["title"] or "",
+            description=row["description"] or "",
+            duration=row["duration"] or 0,
+            views=row["views"] or 0,
+            likes=row["likes"] or 0,
+            coins=row["coins"] or 0,
+            favorites=row["favorites"] or 0,
+            shares=row["shares"] or 0,
+            danmaku=row["danmaku"] or 0,
+            comments=row["comments"] or 0,
+            publish_time=publish_time,
+            collected_at=collected_at,
+            youtube_source_id=row["youtube_source_id"],
+            label=row["label"],
+        )
+
     def get_uploads_for_tracking(self, checkpoint_hours: int) -> List[Upload]:
         """
         Get uploads that need performance tracking at the specified checkpoint.
@@ -142,15 +185,7 @@ class Database:
             ORDER BY u.uploaded_at
         """, (checkpoint_hours, checkpoint_hours))
 
-        uploads = []
-        for row in cursor.fetchall():
-            uploads.append(Upload(
-                video_id=row["video_id"],
-                channel_id=row["channel_id"],
-                bilibili_bvid=row["bilibili_bvid"],
-                uploaded_at=datetime.fromisoformat(row["uploaded_at"].replace("Z", "+00:00") if isinstance(row["uploaded_at"], str) else str(row["uploaded_at"]))
-            ))
-        return uploads
+        return [self._row_to_upload(row) for row in cursor.fetchall()]
 
     def get_all_uploads_with_bvid(self) -> List[Upload]:
         """Get all uploads that have a Bilibili bvid."""
@@ -164,18 +199,7 @@ class Database:
             ORDER BY uploaded_at DESC
         """)
 
-        uploads = []
-        for row in cursor.fetchall():
-            uploaded_at = row["uploaded_at"]
-            if isinstance(uploaded_at, str):
-                uploaded_at = datetime.fromisoformat(uploaded_at.replace("Z", "+00:00"))
-            uploads.append(Upload(
-                video_id=row["video_id"],
-                channel_id=row["channel_id"],
-                bilibili_bvid=row["bilibili_bvid"],
-                uploaded_at=uploaded_at
-            ))
-        return uploads
+        return [self._row_to_upload(row) for row in cursor.fetchall()]
 
     def save_performance(self, perf: UploadPerformance) -> None:
         """
@@ -302,18 +326,7 @@ class Database:
             ORDER BY u.uploaded_at
         """, (min_checkpoint_hours,))
 
-        uploads = []
-        for row in cursor.fetchall():
-            uploaded_at = row["uploaded_at"]
-            if isinstance(uploaded_at, str):
-                uploaded_at = datetime.fromisoformat(uploaded_at.replace("Z", "+00:00"))
-            uploads.append(Upload(
-                video_id=row["video_id"],
-                channel_id=row["channel_id"],
-                bilibili_bvid=row["bilibili_bvid"],
-                uploaded_at=uploaded_at
-            ))
-        return uploads
+        return [self._row_to_upload(row) for row in cursor.fetchall()]
 
     # Phase 3B: Competitor Monitoring Methods
 
@@ -493,35 +506,7 @@ class Database:
         params.append(limit)
 
         cursor = self._conn.execute(query, params)
-        videos = []
-        for row in cursor.fetchall():
-            publish_time = row["publish_time"]
-            if publish_time and isinstance(publish_time, str):
-                publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-
-            collected_at = row["collected_at"]
-            if isinstance(collected_at, str):
-                collected_at = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
-
-            videos.append(CompetitorVideo(
-                bvid=row["bvid"],
-                bilibili_uid=row["bilibili_uid"],
-                title=row["title"] or "",
-                description=row["description"] or "",
-                duration=row["duration"] or 0,
-                views=row["views"] or 0,
-                likes=row["likes"] or 0,
-                coins=row["coins"] or 0,
-                favorites=row["favorites"] or 0,
-                shares=row["shares"] or 0,
-                danmaku=row["danmaku"] or 0,
-                comments=row["comments"] or 0,
-                publish_time=publish_time,
-                collected_at=collected_at,
-                youtube_source_id=row["youtube_source_id"],
-                label=row["label"]
-            ))
-        return videos
+        return [self._row_to_competitor_video(row) for row in cursor.fetchall()]
 
     def get_labeled_competitor_videos(self) -> List[CompetitorVideo]:
         """Get all competitor videos that have a valid label (for training).
@@ -540,35 +525,7 @@ class Database:
             ORDER BY publish_time ASC
         """)
 
-        videos = []
-        for row in cursor.fetchall():
-            publish_time = row["publish_time"]
-            if publish_time and isinstance(publish_time, str):
-                publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-
-            collected_at = row["collected_at"]
-            if isinstance(collected_at, str):
-                collected_at = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
-
-            videos.append(CompetitorVideo(
-                bvid=row["bvid"],
-                bilibili_uid=row["bilibili_uid"],
-                title=row["title"] or "",
-                description=row["description"] or "",
-                duration=row["duration"] or 0,
-                views=row["views"] or 0,
-                likes=row["likes"] or 0,
-                coins=row["coins"] or 0,
-                favorites=row["favorites"] or 0,
-                shares=row["shares"] or 0,
-                danmaku=row["danmaku"] or 0,
-                comments=row["comments"] or 0,
-                publish_time=publish_time,
-                collected_at=collected_at,
-                youtube_source_id=row["youtube_source_id"],
-                label=row["label"]
-            ))
-        return videos
+        return [self._row_to_competitor_video(row) for row in cursor.fetchall()]
 
     def get_unlabeled_competitor_videos(self, limit: int = 1000) -> List[CompetitorVideo]:
         """Get competitor videos that haven't been labeled yet."""
