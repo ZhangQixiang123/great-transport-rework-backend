@@ -120,7 +120,7 @@ type UploadStats struct {
 type UploadJob struct {
 	ID           int64
 	VideoID      string
-	Status       string // pending, downloading, uploading, completed, failed
+	Status       string // pending, downloading, subtitling, uploading, completed, failed
 	Title        string
 	Description  string
 	Tags         string

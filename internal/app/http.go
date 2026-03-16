@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -35,7 +36,18 @@ type uploadResponse struct {
 	Error        string `json:"error,omitempty"`
 }
 
-func ServeHTTP(addr string, controller *Controller) error {
+type jobStatusResponse struct {
+	JobID        int64  `json:"job_id"`
+	VideoID      string `json:"video_id"`
+	Status       string `json:"status"`
+	Title        string `json:"title,omitempty"`
+	BilibiliBvid string `json:"bilibili_bvid,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sync", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -99,37 +111,98 @@ func ServeHTTP(addr string, controller *Controller) error {
 			return
 		}
 
-		job := UploadJob{
-			ID:          jobID,
-			VideoID:     req.VideoID,
-			Status:      "pending",
-			Title:       req.Title,
-			Description: req.Description,
-			Tags:        req.Tags,
-		}
+		// Notify the queue worker
+		queue.Enqueue()
 
-		// Run upload synchronously (long timeout for download+upload)
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-		defer cancel()
-
-		job, uploadErr := controller.UploadVideo(ctx, job)
-
+		// Return 202 Accepted immediately
 		resp := uploadResponse{
-			JobID:        jobID,
-			Status:       job.Status,
-			BilibiliBvid: job.BilibiliBvid,
+			JobID:  jobID,
+			Status: "pending",
 		}
-		if uploadErr != nil {
-			resp.Error = uploadErr.Error()
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			log.Printf("failed to write upload response: %v", err)
 		}
+	})
+
+	mux.HandleFunc("/upload/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			http.Error(w, "id query parameter is required", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		job, err := controller.Store.GetUploadJob(r.Context(), id)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+
+		resp := jobStatusResponse{
+			JobID:        job.ID,
+			VideoID:      job.VideoID,
+			Status:       job.Status,
+			Title:        job.Title,
+			BilibiliBvid: job.BilibiliBvid,
+			ErrorMessage: job.ErrorMessage,
+			CreatedAt:    job.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    job.UpdatedAt.Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/upload/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+
+		jobs, err := controller.Store.ListRecentUploadJobs(r.Context(), limit)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		var resp []jobStatusResponse
+		for _, job := range jobs {
+			resp = append(resp, jobStatusResponse{
+				JobID:        job.ID,
+				VideoID:      job.VideoID,
+				Status:       job.Status,
+				Title:        job.Title,
+				BilibiliBvid: job.BilibiliBvid,
+				ErrorMessage: job.ErrorMessage,
+				CreatedAt:    job.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:    job.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+		if resp == nil {
+			resp = []jobStatusResponse{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 	})
 
 	log.Printf("controller listening on %s", addr)

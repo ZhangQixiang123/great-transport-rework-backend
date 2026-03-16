@@ -15,12 +15,13 @@ type SyncResult struct {
 }
 
 type Controller struct {
-	Downloader Downloader
-	Uploader   Uploader
-	Store      *SQLiteStore
-	OutputDir  string
-	JSRuntime  string
-	Format     string
+	Downloader         Downloader
+	Uploader           Uploader
+	Store              *SQLiteStore
+	OutputDir          string
+	JSRuntime          string
+	Format             string
+	SubtitleGenerator  *SubtitleGenerator
 }
 
 type Uploader interface {
@@ -132,6 +133,18 @@ func (c *Controller) UploadVideo(ctx context.Context, job UploadJob) (UploadJob,
 		job.ErrorMessage = fmt.Sprintf("no files downloaded for %s", job.VideoID)
 		_ = c.Store.UpdateUploadJobStatus(ctx, job.ID, job.Status, "", job.ErrorMessage)
 		return job, fmt.Errorf("%s", job.ErrorMessage)
+	}
+
+	// Subtitle generation (non-fatal)
+	if c.SubtitleGenerator != nil {
+		if err := c.Store.UpdateUploadJobStatus(ctx, job.ID, "subtitling", "", ""); err != nil {
+			log.Printf("failed to update job %d status: %v", job.ID, err)
+		}
+		for _, path := range files {
+			if err := c.SubtitleGenerator.Generate(ctx, path); err != nil {
+				log.Printf("WARNING: subtitle generation failed for %s: %v (continuing without subtitles)", path, err)
+			}
+		}
 	}
 
 	// Update status to uploading

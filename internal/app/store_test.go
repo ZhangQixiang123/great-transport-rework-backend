@@ -775,6 +775,122 @@ func TestUploadJobCRUD(t *testing.T) {
 	}
 }
 
+func TestGetNextPendingJob(t *testing.T) {
+	f, err := os.CreateTemp("", "test-pending-job-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// No jobs yet
+	job, err := store.GetNextPendingJob(ctx)
+	if err != nil {
+		t.Fatalf("GetNextPendingJob (empty): %v", err)
+	}
+	if job != nil {
+		t.Fatal("expected nil when no jobs exist")
+	}
+
+	// Create 3 jobs
+	id1, _ := store.CreateUploadJob(ctx, "vid1", "Title 1", "Desc 1", "")
+	id2, _ := store.CreateUploadJob(ctx, "vid2", "Title 2", "Desc 2", "")
+	store.CreateUploadJob(ctx, "vid3", "Title 3", "Desc 3", "")
+
+	// Should get first (lowest ID)
+	job, err = store.GetNextPendingJob(ctx)
+	if err != nil {
+		t.Fatalf("GetNextPendingJob: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected a job")
+	}
+	if job.ID != id1 {
+		t.Errorf("expected job ID %d, got %d", id1, job.ID)
+	}
+
+	// Mark first as completed, second as downloading
+	store.UpdateUploadJobStatus(ctx, id1, "completed", "", "")
+	store.UpdateUploadJobStatus(ctx, id2, "downloading", "", "")
+
+	// Next pending should be job 3
+	job, err = store.GetNextPendingJob(ctx)
+	if err != nil {
+		t.Fatalf("GetNextPendingJob: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected a job")
+	}
+	if job.VideoID != "vid3" {
+		t.Errorf("expected vid3, got %s", job.VideoID)
+	}
+}
+
+func TestListRecentUploadJobs(t *testing.T) {
+	f, err := os.CreateTemp("", "test-list-jobs-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty list
+	jobs, err := store.ListRecentUploadJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRecentUploadJobs (empty): %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected 0 jobs, got %d", len(jobs))
+	}
+
+	// Create 5 jobs
+	for i := 0; i < 5; i++ {
+		store.CreateUploadJob(ctx, "vid"+string(rune('A'+i)), "Title", "Desc", "")
+	}
+
+	// List with limit 3 — should get 3 most recent (highest IDs first)
+	jobs, err = store.ListRecentUploadJobs(ctx, 3)
+	if err != nil {
+		t.Fatalf("ListRecentUploadJobs: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected 3 jobs, got %d", len(jobs))
+	}
+	// First job should have the highest ID
+	if jobs[0].ID < jobs[1].ID {
+		t.Error("jobs should be ordered by ID DESC")
+	}
+
+	// List all
+	jobs, err = store.ListRecentUploadJobs(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListRecentUploadJobs (all): %v", err)
+	}
+	if len(jobs) != 5 {
+		t.Fatalf("expected 5 jobs, got %d", len(jobs))
+	}
+}
+
 func TestUploadJobFailed(t *testing.T) {
 	f, err := os.CreateTemp("", "test-upload-job-failed-*.db")
 	if err != nil {

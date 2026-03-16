@@ -643,6 +643,8 @@ async def main():
                 print(f"  Mode           : DRY RUN (no HTTP requests)")
             print(f"  Candidates     : {len(transport_results)}")
 
+            # Prepare all upload payloads
+            upload_payloads = []
             for rank, (c, score, tr) in enumerate(transport_results, 1):
                 if not tr["transportable"]:
                     print(f"\n  #{rank} SKIP — failed transportability check")
@@ -698,26 +700,54 @@ async def main():
                     print(f"    └─ (dry run — skipped)")
                     continue
 
-                print(f"    └─ Submitting...")
-                result = upload_client.submit_upload(
-                    video_id=c.video_id,
-                    title=chinese_title,
-                    description=desc,
-                    tags=tags,
-                )
+                upload_payloads.append((c, score, request_payload))
 
-                status = result.get("status", "unknown")
-                bvid = result.get("bilibili_bvid", "")
-                error = result.get("error", "")
+            # Submit all jobs at once (non-blocking), then poll
+            if not args.dry_run and upload_payloads:
+                print_section("Submitting all upload jobs")
+                submitted_jobs = []
+                for c, score, payload in upload_payloads:
+                    result = upload_client.submit_upload(
+                        video_id=payload["video_id"],
+                        title=payload["title"],
+                        description=payload["description"],
+                        tags=payload["tags"],
+                    )
+                    job_id = result.get("job_id")
+                    if job_id:
+                        print(f"  Submitted job {job_id} for {payload['video_id']}")
+                    else:
+                        print(f"  FAILED to submit {payload['video_id']}: {result.get('error', 'unknown')}")
+                    submitted_jobs.append((c, score, result))
 
-                if status == "completed" and bvid:
-                    print(f"    SUCCESS — bvid: {bvid}")
-                elif error:
-                    print(f"    FAILED — {error}")
-                else:
-                    print(f"    Status: {status}")
+                # Poll all jobs until complete
+                print_section("Polling job status (processing serially on server)")
+                poll_deadline = time.time() + 1800  # 30 min
+                while time.time() < poll_deadline:
+                    all_done = True
+                    for i, (c, score, sub) in enumerate(submitted_jobs):
+                        job_id = sub.get("job_id")
+                        if not job_id or sub.get("status") in ("completed", "failed"):
+                            continue
+                        status_resp = upload_client.get_status(job_id)
+                        current_status = status_resp.get("status", "unknown")
+                        if current_status in ("completed", "failed"):
+                            submitted_jobs[i] = (c, score, status_resp)
+                            bvid = status_resp.get("bilibili_bvid", "")
+                            err = status_resp.get("error_message", "")
+                            if current_status == "completed" and bvid:
+                                print(f"  Job {job_id}: SUCCESS — bvid: {bvid}")
+                            elif err:
+                                print(f"  Job {job_id}: FAILED — {err}")
+                            else:
+                                print(f"  Job {job_id}: {current_status}")
+                        else:
+                            all_done = False
+                    if all_done:
+                        break
+                    time.sleep(10)
 
-                upload_results.append((c, score, result))
+                upload_results = [(c, score, r) for c, score, r in submitted_jobs]
         else:
             print(f"\n  (Upload phase disabled — use --upload or --dry-run to enable)")
 
@@ -771,8 +801,8 @@ async def main():
             print_section("Upload Results")
             for rank, (c, score, result) in enumerate(upload_results, 1):
                 status = result.get("status", "unknown")
-                bvid = result.get("bilibili_bvid", "")
-                error = result.get("error", "")
+                bvid = result.get("bilibili_bvid", "") or result.get("bilibili_bvid", "")
+                error = result.get("error", "") or result.get("error_message", "")
                 icon = "✓" if status == "completed" else "✗"
                 print(f"  {icon} #{rank} \"{c.title[:50]}\"")
                 if bvid:

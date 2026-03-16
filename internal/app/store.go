@@ -14,7 +14,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
@@ -1119,6 +1119,56 @@ func (s *SQLiteStore) UpdateUploadJobStatus(ctx context.Context, id int64, statu
 UPDATE upload_jobs SET status = ?, bilibili_bvid = ?, error_message = ?, updated_at = ?
 WHERE id = ?`, status, nullableString(bvid), nullableString(errorMsg), time.Now().UTC(), id)
 	return err
+}
+
+// GetNextPendingJob retrieves the oldest pending upload job.
+func (s *SQLiteStore) GetNextPendingJob(ctx context.Context) (*UploadJob, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
+FROM upload_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1`)
+
+	var job UploadJob
+	var title, desc, tags, bvid, errMsg sql.NullString
+	err := row.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	job.Title = title.String
+	job.Description = desc.String
+	job.Tags = tags.String
+	job.BilibiliBvid = bvid.String
+	job.ErrorMessage = errMsg.String
+	return &job, nil
+}
+
+// ListRecentUploadJobs returns the most recent upload jobs.
+func (s *SQLiteStore) ListRecentUploadJobs(ctx context.Context, limit int) ([]UploadJob, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
+FROM upload_jobs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []UploadJob
+	for rows.Next() {
+		var job UploadJob
+		var title, desc, tags, bvid, errMsg sql.NullString
+		if err := rows.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt); err != nil {
+			return nil, err
+		}
+		job.Title = title.String
+		job.Description = desc.String
+		job.Tags = tags.String
+		job.BilibiliBvid = bvid.String
+		job.ErrorMessage = errMsg.String
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
 }
 
 // GetUploadJob retrieves an upload job by ID.
