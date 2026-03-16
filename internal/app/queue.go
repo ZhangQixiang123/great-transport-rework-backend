@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -9,14 +10,15 @@ import (
 	"time"
 )
 
-// JobQueue processes upload jobs through a 3-stage pipeline:
-// feedJobs → stageDownload → stageSubtitle → stageUpload.
+// JobQueue processes upload jobs through a pipeline:
+// feedJobs → stageDownload → stageUpload (+ subtitle generation after upload).
 // Each stage runs in its own goroutine with exactly one worker,
 // so stages overlap across different jobs while each stage is serial.
 type JobQueue struct {
 	controller *Controller
 	store      *SQLiteStore
 	notify     chan struct{}
+	subtitleCfg *SubtitlePipelineConfig // nil = skip subtitle generation
 }
 
 // pipelineJob carries an UploadJob and its downloaded files between stages.
@@ -26,12 +28,27 @@ type pipelineJob struct {
 }
 
 // NewJobQueue creates a new job queue.
+// Subtitle generation is automatically enabled if a BiliupUploader with a
+// cookie path is configured on the controller.
 func NewJobQueue(controller *Controller, store *SQLiteStore) *JobQueue {
-	return &JobQueue{
+	q := &JobQueue{
 		controller: controller,
 		store:      store,
 		notify:     make(chan struct{}, 1),
 	}
+
+	// Auto-configure subtitle pipeline from existing uploader settings.
+	if bu, ok := controller.Uploader.(*BiliupUploader); ok && bu.opts.CookiePath != "" {
+		q.subtitleCfg = &SubtitlePipelineConfig{
+			WhisperScript: "scripts/whisper_transcribe.py",
+			WhisperModel:  "base",
+			CookiePath:    bu.opts.CookiePath,
+		}
+		log.Printf("queue: subtitle pipeline enabled (model=%s, cookie=%s)",
+			q.subtitleCfg.WhisperModel, q.subtitleCfg.CookiePath)
+	}
+
+	return q
 }
 
 // Enqueue sends a non-blocking notification that a new job is available.
@@ -52,10 +69,9 @@ func (q *JobQueue) run(ctx context.Context) {
 
 	jobCh := make(chan UploadJob)
 	downloadedCh := make(chan pipelineJob)
-	subtitledCh := make(chan pipelineJob)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
@@ -63,11 +79,7 @@ func (q *JobQueue) run(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		q.stageSubtitle(ctx, downloadedCh, subtitledCh)
-	}()
-	go func() {
-		defer wg.Done()
-		q.stageUpload(ctx, subtitledCh)
+		q.stageUpload(ctx, downloadedCh)
 	}()
 
 	// Feed jobs into the pipeline, then close to cascade shutdown.
@@ -178,57 +190,19 @@ func (q *JobQueue) doDownload(parentCtx context.Context, job UploadJob) ([]strin
 	}
 
 	log.Printf("queue: job %d downloaded %d file(s)", job.ID, len(files))
+
+	// Store downloaded file paths in the job record.
+	if filesJSON, err := json.Marshal(files); err == nil {
+		if err := q.store.UpdateUploadJobFiles(parentCtx, job.ID, string(filesJSON)); err != nil {
+			log.Printf("queue: failed to store download files for job %d: %v", job.ID, err)
+		}
+	}
+
 	return files, true
 }
 
 // ---------------------------------------------------------------------------
-// Stage 2: Subtitle
-// ---------------------------------------------------------------------------
-
-func (q *JobQueue) stageSubtitle(ctx context.Context, in <-chan pipelineJob, out chan<- pipelineJob) {
-	defer close(out)
-	for pj := range in {
-		if ctx.Err() != nil {
-			return
-		}
-		q.doSubtitle(ctx, &pj)
-		select {
-		case out <- pj:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (q *JobQueue) doSubtitle(parentCtx context.Context, pj *pipelineJob) {
-	if q.controller.SubtitleGenerator == nil {
-		return // pass-through
-	}
-
-	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Minute)
-	defer cancel()
-
-	log.Printf("queue: subtitling job %d", pj.job.ID)
-
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("queue: job %d panicked in subtitle: %v (continuing)", pj.job.ID, r)
-		}
-	}()
-
-	if err := q.store.UpdateUploadJobStatus(parentCtx, pj.job.ID, "subtitling", "", ""); err != nil {
-		log.Printf("queue: failed to update job %d status to subtitling: %v", pj.job.ID, err)
-	}
-
-	for _, path := range pj.files {
-		if err := q.controller.SubtitleGenerator.Generate(ctx, path); err != nil {
-			log.Printf("WARNING: subtitle generation failed for job %d file %s: %v (continuing without subtitles)", pj.job.ID, path, err)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Stage 3: Upload
+// Stage 2: Upload
 // ---------------------------------------------------------------------------
 
 func (q *JobQueue) stageUpload(ctx context.Context, in <-chan pipelineJob) {
@@ -300,4 +274,32 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 	_ = q.store.UpdateUploadJobStatus(ctx, job.ID, "completed", bvid, "")
 	_ = q.store.MarkUploadedWithBvid(ctx, job.VideoID, "", bvid)
 	log.Printf("queue: job %d completed (bvid=%s)", job.ID, bvid)
+
+	// Subtitle generation (non-blocking, runs after upload).
+	if q.subtitleCfg != nil && bvid != "" && len(pj.files) > 0 {
+		go q.doSubtitle(parentCtx, job.ID, bvid, pj.files[0])
+	}
+}
+
+func (q *JobQueue) doSubtitle(ctx context.Context, jobID int64, bvid, videoPath string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("queue: job %d subtitle panicked: %v", jobID, r)
+			_ = q.store.UpdateSubtitleStatus(ctx, jobID, "failed")
+		}
+	}()
+
+	_ = q.store.UpdateSubtitleStatus(ctx, jobID, "generating")
+
+	subtitleCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	if err := RunSubtitlePipeline(subtitleCtx, *q.subtitleCfg, videoPath, bvid); err != nil {
+		log.Printf("queue: job %d subtitle failed: %v", jobID, err)
+		_ = q.store.UpdateSubtitleStatus(ctx, jobID, "failed")
+		return
+	}
+
+	_ = q.store.UpdateSubtitleStatus(ctx, jobID, "completed")
+	log.Printf("queue: job %d subtitle completed", jobID)
 }

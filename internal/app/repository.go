@@ -118,16 +118,18 @@ type UploadStats struct {
 
 // UploadJob represents a video upload job submitted via the HTTP API.
 type UploadJob struct {
-	ID           int64
-	VideoID      string
-	Status       string // pending, downloading, subtitling, uploading, completed, failed
-	Title        string
-	Description  string
-	Tags         string
-	BilibiliBvid string
-	ErrorMessage string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             int64
+	VideoID        string
+	Status         string // pending, downloading, uploading, completed, failed
+	Title          string
+	Description    string
+	Tags           string
+	BilibiliBvid   string
+	DownloadFiles  string // JSON array of downloaded file paths
+	SubtitleStatus string // pending, generating, completed, failed
+	ErrorMessage   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // CompetitorChannel represents a Bilibili transporter channel to monitor.

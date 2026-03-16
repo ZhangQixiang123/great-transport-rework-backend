@@ -1,5 +1,6 @@
 downloads/
-*.mod
+!go.mod
+!go.sum
 *.db
 cookies.json
 *.mp4
@@ -36,3 +37,4 @@ yt-transfer.exe
 yttransfer
 *.png
 discovery_results.txt
+output/

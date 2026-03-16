@@ -155,6 +155,8 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 			description TEXT,
 			tags TEXT,
 			bilibili_bvid TEXT,
+			download_files TEXT,
+			subtitle_status TEXT NOT NULL DEFAULT 'pending',
 			error_message TEXT,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -170,6 +172,11 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 
 	// Migration: Add bilibili_bvid column to uploads table if it doesn't exist
 	if err := s.migrateAddBilibiliBvid(ctx); err != nil {
+		return err
+	}
+
+	// Migration: Add download_files and subtitle_status columns to upload_jobs
+	if err := s.migrateUploadJobsSubtitle(ctx); err != nil {
 		return err
 	}
 
@@ -203,6 +210,45 @@ func (s *SQLiteStore) migrateAddBilibiliBvid(ctx context.Context) error {
 	if !hasBvid {
 		_, err := s.db.ExecContext(ctx, `ALTER TABLE uploads ADD COLUMN bilibili_bvid TEXT`)
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateUploadJobsSubtitle adds download_files and subtitle_status columns to upload_jobs.
+func (s *SQLiteStore) migrateUploadJobsSubtitle(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(upload_jobs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasDownloadFiles := false
+	hasSubtitleStatus := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "download_files" {
+			hasDownloadFiles = true
+		}
+		if name == "subtitle_status" {
+			hasSubtitleStatus = true
+		}
+	}
+
+	if !hasDownloadFiles {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE upload_jobs ADD COLUMN download_files TEXT`); err != nil {
+			return err
+		}
+	}
+	if !hasSubtitleStatus {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE upload_jobs ADD COLUMN subtitle_status TEXT NOT NULL DEFAULT 'pending'`); err != nil {
 			return err
 		}
 	}
@@ -1121,75 +1167,112 @@ WHERE id = ?`, status, nullableString(bvid), nullableString(errorMsg), time.Now(
 	return err
 }
 
+// UpdateUploadJobFiles stores the downloaded file paths (JSON array) for a job.
+func (s *SQLiteStore) UpdateUploadJobFiles(ctx context.Context, id int64, filesJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_jobs SET download_files = ?, updated_at = ? WHERE id = ?`,
+		filesJSON, time.Now().UTC(), id)
+	return err
+}
+
+// UpdateSubtitleStatus updates the subtitle_status for a job.
+func (s *SQLiteStore) UpdateSubtitleStatus(ctx context.Context, id int64, status string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_jobs SET subtitle_status = ?, updated_at = ? WHERE id = ?`,
+		status, time.Now().UTC(), id)
+	return err
+}
+
+// ListJobsNeedingSubtitles returns completed jobs that still need subtitle processing.
+func (s *SQLiteStore) ListJobsNeedingSubtitles(ctx context.Context, limit int) ([]UploadJob, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, video_id, status, title, description, tags, bilibili_bvid, download_files, subtitle_status, error_message, created_at, updated_at
+FROM upload_jobs
+WHERE status = 'completed' AND subtitle_status = 'pending'
+  AND bilibili_bvid IS NOT NULL AND bilibili_bvid != ''
+  AND download_files IS NOT NULL AND download_files != ''
+ORDER BY id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanUploadJobs(rows)
+}
+
+// uploadJobColumns is the shared column list for upload_jobs queries.
+const uploadJobColumns = `id, video_id, status, title, description, tags, bilibili_bvid, download_files, subtitle_status, error_message, created_at, updated_at`
+
+// scanUploadJob scans a single upload job row.
+func scanUploadJob(row scanner) (UploadJob, error) {
+	var job UploadJob
+	var title, desc, tags, bvid, dlFiles, subStatus, errMsg sql.NullString
+	err := row.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &dlFiles, &subStatus, &errMsg, &job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		return job, err
+	}
+	job.Title = title.String
+	job.Description = desc.String
+	job.Tags = tags.String
+	job.BilibiliBvid = bvid.String
+	job.DownloadFiles = dlFiles.String
+	job.SubtitleStatus = subStatus.String
+	if job.SubtitleStatus == "" {
+		job.SubtitleStatus = "pending"
+	}
+	job.ErrorMessage = errMsg.String
+	return job, nil
+}
+
+// scanUploadJobs scans multiple upload job rows.
+func scanUploadJobs(rows *sql.Rows) ([]UploadJob, error) {
+	var jobs []UploadJob
+	for rows.Next() {
+		job, err := scanUploadJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
 // GetNextPendingJob retrieves the oldest pending upload job.
 func (s *SQLiteStore) GetNextPendingJob(ctx context.Context) (*UploadJob, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
-FROM upload_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1`)
+SELECT `+uploadJobColumns+` FROM upload_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1`)
 
-	var job UploadJob
-	var title, desc, tags, bvid, errMsg sql.NullString
-	err := row.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt)
+	job, err := scanUploadJob(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	job.Title = title.String
-	job.Description = desc.String
-	job.Tags = tags.String
-	job.BilibiliBvid = bvid.String
-	job.ErrorMessage = errMsg.String
 	return &job, nil
 }
 
 // ListRecentUploadJobs returns the most recent upload jobs.
 func (s *SQLiteStore) ListRecentUploadJobs(ctx context.Context, limit int) ([]UploadJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
-FROM upload_jobs ORDER BY id DESC LIMIT ?`, limit)
+SELECT `+uploadJobColumns+` FROM upload_jobs ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var jobs []UploadJob
-	for rows.Next() {
-		var job UploadJob
-		var title, desc, tags, bvid, errMsg sql.NullString
-		if err := rows.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt); err != nil {
-			return nil, err
-		}
-		job.Title = title.String
-		job.Description = desc.String
-		job.Tags = tags.String
-		job.BilibiliBvid = bvid.String
-		job.ErrorMessage = errMsg.String
-		jobs = append(jobs, job)
-	}
-	return jobs, rows.Err()
+	return scanUploadJobs(rows)
 }
 
 // GetUploadJob retrieves an upload job by ID.
 func (s *SQLiteStore) GetUploadJob(ctx context.Context, id int64) (*UploadJob, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, video_id, status, title, description, tags, bilibili_bvid, error_message, created_at, updated_at
-FROM upload_jobs WHERE id = ?`, id)
+SELECT `+uploadJobColumns+` FROM upload_jobs WHERE id = ?`, id)
 
-	var job UploadJob
-	var title, desc, tags, bvid, errMsg sql.NullString
-	err := row.Scan(&job.ID, &job.VideoID, &job.Status, &title, &desc, &tags, &bvid, &errMsg, &job.CreatedAt, &job.UpdatedAt)
+	job, err := scanUploadJob(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	job.Title = title.String
-	job.Description = desc.String
-	job.Tags = tags.String
-	job.BilibiliBvid = bvid.String
-	job.ErrorMessage = errMsg.String
 	return &job, nil
 }

@@ -163,13 +163,13 @@ setup_project() {
 setup_cron() {
     info "Setting up daily cron job at ${CRON_HOUR}:${CRON_MINUTE} UTC..."
 
-    local cron_line="${CRON_MINUTE} ${CRON_HOUR} * * * cd ${INSTALL_DIR}/ml-service && ${INSTALL_DIR}/ml-service/.venv/bin/python daily_job.py >> ${INSTALL_DIR}/logs/cron.log 2>&1"
+    local cron_line="${CRON_MINUTE} ${CRON_HOUR} * * * cd ${INSTALL_DIR}/ml-service && ${INSTALL_DIR}/ml-service/.venv/bin/python real_run.py --upload >> ${INSTALL_DIR}/logs/cron.log 2>&1"
 
     # Remove old entries, add new one
-    ( crontab -l 2>/dev/null | grep -v "daily_job.py" ; echo "$cron_line" ) | crontab -
+    ( crontab -l 2>/dev/null | grep -v "daily_job\|real_run" ; echo "$cron_line" ) | crontab -
 
     info "Cron installed:"
-    crontab -l | grep daily_job
+    crontab -l | grep real_run
 }
 
 # ---------- Step 7: Log rotation ----------
@@ -239,7 +239,7 @@ main() {
     info "  1. Copy cookies.json (biliup auth) to ${INSTALL_DIR}/cookies.json"
     info "  2. Copy trained model to ${INSTALL_DIR}/ml-service/models/"
     info "  3. Edit ${INSTALL_DIR}/ml-service/.env to set YOUTUBE_API_KEY"
-    info "  4. Test with: cd ${INSTALL_DIR}/ml-service && .venv/bin/python daily_job.py --dry-run"
+    info "  4. Test with: cd ${INSTALL_DIR}/ml-service && .venv/bin/python real_run.py --dry-run"
     info "  5. Cron runs daily at ${CRON_HOUR}:${CRON_MINUTE} UTC"
 }
 

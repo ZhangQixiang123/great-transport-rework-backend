@@ -37,14 +37,16 @@ type uploadResponse struct {
 }
 
 type jobStatusResponse struct {
-	JobID        int64  `json:"job_id"`
-	VideoID      string `json:"video_id"`
-	Status       string `json:"status"`
-	Title        string `json:"title,omitempty"`
-	BilibiliBvid string `json:"bilibili_bvid,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	JobID          int64  `json:"job_id"`
+	VideoID        string `json:"video_id"`
+	Status         string `json:"status"`
+	Title          string `json:"title,omitempty"`
+	BilibiliBvid   string `json:"bilibili_bvid,omitempty"`
+	DownloadFiles  string `json:"download_files,omitempty"`
+	SubtitleStatus string `json:"subtitle_status"`
+	ErrorMessage   string `json:"error_message,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
@@ -153,14 +155,16 @@ func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 		}
 
 		resp := jobStatusResponse{
-			JobID:        job.ID,
-			VideoID:      job.VideoID,
-			Status:       job.Status,
-			Title:        job.Title,
-			BilibiliBvid: job.BilibiliBvid,
-			ErrorMessage: job.ErrorMessage,
-			CreatedAt:    job.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:    job.UpdatedAt.Format(time.RFC3339),
+			JobID:          job.ID,
+			VideoID:        job.VideoID,
+			Status:         job.Status,
+			Title:          job.Title,
+			BilibiliBvid:   job.BilibiliBvid,
+			DownloadFiles:  job.DownloadFiles,
+			SubtitleStatus: job.SubtitleStatus,
+			ErrorMessage:   job.ErrorMessage,
+			CreatedAt:      job.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:      job.UpdatedAt.Format(time.RFC3339),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -187,14 +191,16 @@ func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 		var resp []jobStatusResponse
 		for _, job := range jobs {
 			resp = append(resp, jobStatusResponse{
-				JobID:        job.ID,
-				VideoID:      job.VideoID,
-				Status:       job.Status,
-				Title:        job.Title,
-				BilibiliBvid: job.BilibiliBvid,
-				ErrorMessage: job.ErrorMessage,
-				CreatedAt:    job.CreatedAt.Format(time.RFC3339),
-				UpdatedAt:    job.UpdatedAt.Format(time.RFC3339),
+				JobID:          job.ID,
+				VideoID:        job.VideoID,
+				Status:         job.Status,
+				Title:          job.Title,
+				BilibiliBvid:   job.BilibiliBvid,
+				DownloadFiles:  job.DownloadFiles,
+				SubtitleStatus: job.SubtitleStatus,
+				ErrorMessage:   job.ErrorMessage,
+				CreatedAt:      job.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:      job.UpdatedAt.Format(time.RFC3339),
 			})
 		}
 		if resp == nil {
@@ -203,6 +209,112 @@ func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	})
+
+	// List completed jobs that still need subtitle processing.
+	mux.HandleFunc("/upload/needs-subtitles", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+
+		jobs, err := controller.Store.ListJobsNeedingSubtitles(r.Context(), limit)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		var resp []jobStatusResponse
+		for _, job := range jobs {
+			resp = append(resp, jobStatusResponse{
+				JobID:          job.ID,
+				VideoID:        job.VideoID,
+				Status:         job.Status,
+				Title:          job.Title,
+				BilibiliBvid:   job.BilibiliBvid,
+				DownloadFiles:  job.DownloadFiles,
+				SubtitleStatus: job.SubtitleStatus,
+				ErrorMessage:   job.ErrorMessage,
+				CreatedAt:      job.CreatedAt.Format(time.RFC3339),
+				UpdatedAt:      job.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+		if resp == nil {
+			resp = []jobStatusResponse{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	// Submit subtitle SRT content for a job. Go converts to BCC and uploads to Bilibili.
+	mux.HandleFunc("/upload/subtitle", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			JobID      int64  `json:"job_id"`
+			SRTContent string `json:"srt_content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if req.JobID == 0 || req.SRTContent == "" {
+			http.Error(w, "job_id and srt_content are required", http.StatusBadRequest)
+			return
+		}
+
+		// Look up the job to get bvid
+		job, err := controller.Store.GetUploadJob(r.Context(), req.JobID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		if job.BilibiliBvid == "" {
+			http.Error(w, "job has no bilibili_bvid yet", http.StatusBadRequest)
+			return
+		}
+
+		// Get cookie path from uploader
+		cookiePath := ""
+		if bu, ok := controller.Uploader.(*BiliupUploader); ok {
+			cookiePath = bu.opts.CookiePath
+		}
+		if cookiePath == "" {
+			cookiePath = "cookies.json"
+		}
+
+		// Mark as generating
+		_ = controller.Store.UpdateSubtitleStatus(r.Context(), req.JobID, "generating")
+
+		// Upload to Bilibili
+		if err := uploadSubtitleToBilibili(job.BilibiliBvid, req.SRTContent, cookiePath); err != nil {
+			log.Printf("subtitle upload failed for job %d: %v", req.JobID, err)
+			_ = controller.Store.UpdateSubtitleStatus(r.Context(), req.JobID, "failed")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "failed",
+				"error":  err.Error(),
+			})
+			return
+		}
+
+		_ = controller.Store.UpdateSubtitleStatus(r.Context(), req.JobID, "completed")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
 	log.Printf("controller listening on %s", addr)
