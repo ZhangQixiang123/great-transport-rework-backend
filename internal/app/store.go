@@ -1183,21 +1183,7 @@ UPDATE upload_jobs SET subtitle_status = ?, updated_at = ? WHERE id = ?`,
 	return err
 }
 
-// ListJobsNeedingSubtitles returns completed jobs that still need subtitle processing.
-func (s *SQLiteStore) ListJobsNeedingSubtitles(ctx context.Context, limit int) ([]UploadJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, video_id, status, title, description, tags, bilibili_bvid, download_files, subtitle_status, error_message, created_at, updated_at
-FROM upload_jobs
-WHERE status = 'completed' AND subtitle_status = 'pending'
-  AND bilibili_bvid IS NOT NULL AND bilibili_bvid != ''
-  AND download_files IS NOT NULL AND download_files != ''
-ORDER BY id ASC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanUploadJobs(rows)
-}
+
 
 // uploadJobColumns is the shared column list for upload_jobs queries.
 const uploadJobColumns = `id, video_id, status, title, description, tags, bilibili_bvid, download_files, subtitle_status, error_message, created_at, updated_at`
