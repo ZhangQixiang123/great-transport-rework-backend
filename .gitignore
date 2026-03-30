@@ -25,16 +25,31 @@ node_modules/
 *.log
 *_log.txt
 
-# ML model binaries (keep metadata, exclude large model files)
-ml-service/models/*.pt
-ml-service/models/*.pkl
-ml-service/models/*.txt
+# ML model binaries
+*.pt
+*.pkl
+*.npz
+*.safetensors
 ml-service/models/finetuned/
-!ml-service/models/.gitkeep
+deprecated/ml-service/models/finetuned/
 
+# Binaries
 yt-transfer
 yt-transfer.exe
 yttransfer
+yttransfer.exe
+NUL
+
+# SQLite temp files
+*.db-shm
+*.db-wal
+
+# Temp/preview files
+draft_preview.json
+subtitle_preview.txt
+
+# Data
+data/
 *.png
 discovery_results.txt
 output/

@@ -72,17 +72,7 @@ class MarketAnalysisSkill(Skill):
         }
 
     def execute(self, context: dict) -> dict:
-        """Assess market opportunity for a Bilibili content niche.
-
-        Expected context keys:
-            bilibili_check: str
-            total: int
-            high_view_count: int
-            recent_count: int
-            min_views: int
-            max_views: int
-            top_videos_with_dates: str
-        """
+        """Assess market opportunity for a Bilibili content niche."""
         rendered_system = self.system_prompt.format(
             learned_criteria=self.learned_criteria,
         )
@@ -98,21 +88,13 @@ class MarketAnalysisSkill(Skill):
         )
         result = self._parse_response(response)
 
-        # Clamp opportunity_score to [0, 1]
         if "opportunity_score" in result:
             result["opportunity_score"] = max(0.0, min(1.0, float(result["opportunity_score"])))
 
         return result
 
     def reflect_on_outcomes(self, outcomes: list) -> Optional[dict]:
-        """Loop 2 reflection: validate past saturation judgments against outcomes.
-
-        Args:
-            outcomes: List of outcome dicts with our transport results.
-
-        Returns:
-            Parsed reflection result, or None.
-        """
+        """Loop 2 reflection: validate past saturation judgments against outcomes."""
         if not outcomes:
             return None
 
@@ -165,7 +147,6 @@ class MarketAnalysisSkill(Skill):
 
     @staticmethod
     def _format_judgment_outcomes(outcomes: list) -> str:
-        """Format outcome data for reflection prompt."""
         if not outcomes:
             return "(no outcomes)"
         lines = []

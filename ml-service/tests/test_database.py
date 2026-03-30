@@ -1,585 +1,178 @@
-"""
-Tests for the database module.
-"""
+"""Tests for Database — new persona tables + KV store."""
+import json
 import pytest
-import sqlite3
-import tempfile
-import os
-from datetime import datetime, timedelta
-
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from app.db.database import Database, Upload, UploadPerformance, UploadOutcome
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary SQLite database with test schema."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    # Create schema
-    conn = sqlite3.connect(db_path)
-    conn.executescript("""
-        CREATE TABLE uploads (
-            video_id TEXT PRIMARY KEY,
-            channel_id TEXT NOT NULL,
-            bilibili_bvid TEXT,
-            uploaded_at TEXT NOT NULL
-        );
-
-        CREATE TABLE upload_performance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            upload_id TEXT NOT NULL,
-            checkpoint_hours INTEGER NOT NULL,
-            recorded_at TEXT NOT NULL,
-            views INTEGER NOT NULL,
-            likes INTEGER NOT NULL,
-            coins INTEGER NOT NULL,
-            favorites INTEGER NOT NULL,
-            shares INTEGER NOT NULL,
-            danmaku INTEGER NOT NULL,
-            comments INTEGER NOT NULL,
-            view_velocity REAL NOT NULL,
-            engagement_rate REAL NOT NULL,
-            UNIQUE(upload_id, checkpoint_hours)
-        );
-
-        CREATE TABLE upload_outcomes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            upload_id TEXT UNIQUE NOT NULL,
-            label TEXT NOT NULL,
-            labeled_at TEXT NOT NULL,
-            final_views INTEGER NOT NULL,
-            final_engagement_rate REAL NOT NULL,
-            final_coins INTEGER NOT NULL
-        );
-    """)
-    conn.close()
-
-    yield db_path
-
-    # Cleanup
-    os.unlink(db_path)
-
-
-class TestDatabaseConnection:
-    """Tests for database connection handling."""
-
-    def test_connect_sqlite(self, temp_db):
-        """Test connecting to SQLite database."""
-        db = Database(temp_db)
-        db.connect()
-        assert db._conn is not None
-        db.close()
-        assert db._conn is None
-
-    def test_context_manager(self, temp_db):
-        """Test database context manager."""
-        with Database(temp_db) as db:
-            assert db._conn is not None
-        # Connection should be closed after context
-
-    def test_postgres_not_implemented(self):
-        """Test that PostgreSQL raises NotImplementedError."""
-        db = Database("postgresql://user:pass@localhost:5432/test")
-        with pytest.raises(NotImplementedError):
-            db.connect()
-
-
-class TestGetUploadsForTracking:
-    """Tests for get_uploads_for_tracking method."""
-
-    def test_returns_empty_when_no_uploads(self, temp_db):
-        """Test returns empty list when no uploads exist."""
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_tracking(24)
-            assert uploads == []
-
-    def test_returns_uploads_due_for_checkpoint(self, temp_db):
-        """Test returns uploads that are due for a checkpoint."""
-        # Insert upload from 25 hours ago (due for 24h checkpoint)
-        conn = sqlite3.connect(temp_db)
-        uploaded_at = (datetime.utcnow() - timedelta(hours=25)).isoformat()
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", uploaded_at)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_tracking(24)
-            assert len(uploads) == 1
-            assert uploads[0].video_id == "vid1"
-            assert uploads[0].bilibili_bvid == "BV1test123"
-
-    def test_excludes_already_tracked(self, temp_db):
-        """Test excludes uploads already tracked at checkpoint."""
-        conn = sqlite3.connect(temp_db)
-        uploaded_at = (datetime.utcnow() - timedelta(hours=25)).isoformat()
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", uploaded_at)
-        )
-        conn.execute(
-            "INSERT INTO upload_performance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (None, "vid1", 24, datetime.utcnow().isoformat(), 1000, 50, 20, 30, 10, 100, 5, 41.67, 0.01)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_tracking(24)
-            assert len(uploads) == 0
-
-    def test_excludes_uploads_without_bvid(self, temp_db):
-        """Test excludes uploads without bilibili_bvid."""
-        conn = sqlite3.connect(temp_db)
-        uploaded_at = (datetime.utcnow() - timedelta(hours=25)).isoformat()
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", None, uploaded_at)
-        )
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid2", "ch1", "", uploaded_at)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_tracking(24)
-            assert len(uploads) == 0
-
-
-class TestSavePerformance:
-    """Tests for save_performance method."""
-
-    def test_save_new_performance(self, temp_db):
-        """Test saving new performance record."""
-        # Insert upload first
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            perf = UploadPerformance(
-                id=None,
-                upload_id="vid1",
-                checkpoint_hours=24,
-                recorded_at=datetime.utcnow(),
-                views=10000,
-                likes=500,
-                coins=200,
-                favorites=300,
-                shares=50,
-                danmaku=100,
-                comments=30,
-                view_velocity=416.67,
-                engagement_rate=0.10
-            )
-            db.save_performance(perf)
-
-        # Verify saved
-        conn = sqlite3.connect(temp_db)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            "SELECT * FROM upload_performance WHERE upload_id = ?",
-            ("vid1",)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        assert row is not None
-        assert row["views"] == 10000
-        assert row["checkpoint_hours"] == 24
-        assert row["engagement_rate"] == 0.10
-
-    def test_upsert_performance(self, temp_db):
-        """Test updating existing performance record."""
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO upload_performance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (None, "vid1", 24, datetime.utcnow().isoformat(), 1000, 50, 20, 30, 10, 100, 5, 41.67, 0.01)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            perf = UploadPerformance(
-                id=None,
-                upload_id="vid1",
-                checkpoint_hours=24,
-                recorded_at=datetime.utcnow(),
-                views=2000,  # Updated
-                likes=100,
-                coins=40,
-                favorites=60,
-                shares=20,
-                danmaku=200,
-                comments=10,
-                view_velocity=83.33,
-                engagement_rate=0.10
-            )
-            db.save_performance(perf)
-
-        # Verify updated
-        conn = sqlite3.connect(temp_db)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            "SELECT * FROM upload_performance WHERE upload_id = ?",
-            ("vid1",)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        assert row["views"] == 2000
-
-
-class TestSaveOutcome:
-    """Tests for save_outcome method."""
-
-    def test_save_new_outcome(self, temp_db):
-        """Test saving new outcome record."""
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            outcome = UploadOutcome(
-                id=None,
-                upload_id="vid1",
-                label="successful",
-                labeled_at=datetime.utcnow(),
-                final_views=500000,
-                final_engagement_rate=0.04,
-                final_coins=5000
-            )
-            db.save_outcome(outcome)
-
-        # Verify saved
-        conn = sqlite3.connect(temp_db)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(
-            "SELECT * FROM upload_outcomes WHERE upload_id = ?",
-            ("vid1",)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        assert row is not None
-        assert row["label"] == "successful"
-        assert row["final_views"] == 500000
-
-    def test_save_all_label_types(self, temp_db):
-        """Test saving all label types."""
-        labels = ["viral", "successful", "standard", "failed"]
-
-        conn = sqlite3.connect(temp_db)
-        for i, label in enumerate(labels):
-            conn.execute(
-                "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-                (f"vid{i}", "ch1", f"BV1test{i}", datetime.utcnow().isoformat())
-            )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            for i, label in enumerate(labels):
-                outcome = UploadOutcome(
-                    id=None,
-                    upload_id=f"vid{i}",
-                    label=label,
-                    labeled_at=datetime.utcnow(),
-                    final_views=100000 * (i + 1),
-                    final_engagement_rate=0.01 * (i + 1),
-                    final_coins=1000 * (i + 1)
-                )
-                db.save_outcome(outcome)
-
-        # Verify all saved
-        conn = sqlite3.connect(temp_db)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("SELECT label FROM upload_outcomes")
-        saved_labels = [row["label"] for row in cursor.fetchall()]
-        conn.close()
-
-        assert set(saved_labels) == set(labels)
-
-
-class TestGetLatestPerformance:
-    """Tests for get_latest_performance method."""
-
-    def test_returns_none_when_no_data(self, temp_db):
-        """Test returns None when no performance data exists."""
-        with Database(temp_db) as db:
-            perf = db.get_latest_performance("nonexistent")
-            assert perf is None
-
-    def test_returns_latest_checkpoint(self, temp_db):
-        """Test returns the latest checkpoint performance."""
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        # Insert multiple checkpoints
-        for cp, views in [(1, 100), (6, 600), (24, 2400), (48, 4800)]:
-            conn.execute(
-                "INSERT INTO upload_performance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (None, "vid1", cp, datetime.utcnow().isoformat(), views, 50, 20, 30, 10, 100, 5, views/cp, 0.01)
-            )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            perf = db.get_latest_performance("vid1")
-            assert perf is not None
-            assert perf.checkpoint_hours == 48
-            assert perf.views == 4800
-
-
-class TestGetUploadsForLabeling:
-    """Tests for get_uploads_for_labeling method."""
-
-    def test_returns_uploads_with_required_checkpoint(self, temp_db):
-        """Test returns uploads that have the required checkpoint."""
-        conn = sqlite3.connect(temp_db)
-        # Upload with 720h checkpoint (ready for labeling)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO upload_performance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (None, "vid1", 720, datetime.utcnow().isoformat(), 50000, 2500, 1000, 500, 200, 1500, 300, 69.44, 0.08)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_labeling(720)
-            assert len(uploads) == 1
-            assert uploads[0].video_id == "vid1"
-
-    def test_excludes_already_labeled(self, temp_db):
-        """Test excludes uploads that are already labeled."""
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO upload_performance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (None, "vid1", 720, datetime.utcnow().isoformat(), 50000, 2500, 1000, 500, 200, 1500, 300, 69.44, 0.08)
-        )
-        conn.execute(
-            "INSERT INTO upload_outcomes VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (None, "vid1", "successful", datetime.utcnow().isoformat(), 50000, 0.08, 1000)
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_uploads_for_labeling(720)
-            assert len(uploads) == 0
-
-
-class TestGetAllUploadsWithBvid:
-    """Tests for get_all_uploads_with_bvid method."""
-
-    def test_returns_only_uploads_with_bvid(self, temp_db):
-        """Test returns only uploads that have a bilibili_bvid."""
-        conn = sqlite3.connect(temp_db)
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid1", "ch1", "BV1test123", datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid2", "ch1", None, datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid3", "ch1", "", datetime.utcnow().isoformat())
-        )
-        conn.execute(
-            "INSERT INTO uploads VALUES (?, ?, ?, ?)",
-            ("vid4", "ch1", "BV1test456", datetime.utcnow().isoformat())
-        )
-        conn.commit()
-        conn.close()
-
-        with Database(temp_db) as db:
-            uploads = db.get_all_uploads_with_bvid()
-            assert len(uploads) == 2
-            bvids = [u.bilibili_bvid for u in uploads]
-            assert "BV1test123" in bvids
-            assert "BV1test456" in bvids
-
-
-class TestPendingRecommendations:
-    """Tests for get_pending_recommendations and mark_recommendation_uploaded."""
-
-    def test_returns_empty_when_no_recommendations(self, temp_db):
-        """Test returns empty list when no recommendations exist."""
-        with Database(temp_db) as db:
-            db.ensure_discovery_tables()
-            picks = db.get_pending_recommendations(limit=2)
-            assert picks == []
-
-    def test_returns_pending_ordered_by_score(self, temp_db):
-        """Test returns pending recommendations sorted by combined_score DESC."""
-        with Database(temp_db) as db:
-            db.ensure_discovery_tables()
-            run_id = db.save_discovery_run(5, 10, 3)
-
-            # Insert test recommendations directly
-            for vid, score in [("AAA", 0.5), ("BBB", 0.9), ("CCC", 0.7)]:
-                db._conn.execute("""
-                    INSERT INTO discovery_recommendations
-                        (run_id, keyword, heat_score, youtube_video_id,
-                         youtube_title, youtube_channel, youtube_views,
-                         youtube_likes, youtube_duration_seconds,
-                         relevance_score, predicted_views, predicted_label,
-                         combined_score, status)
-                    VALUES (?, 'test', 100, ?, ?, 'ch', 10000, 500, 300,
-                            0.8, 50000, 'successful', ?, 'pending')
-                """, (run_id, vid, f"Title {vid}", score))
-            db._conn.commit()
-
-            picks = db.get_pending_recommendations(limit=2)
-            assert len(picks) == 2
-            assert picks[0]["youtube_video_id"] == "BBB"
-            assert picks[0]["combined_score"] == 0.9
-            assert picks[1]["youtube_video_id"] == "CCC"
-
-    def test_excludes_uploaded(self, temp_db):
-        """Test that uploaded recommendations are excluded."""
-        with Database(temp_db) as db:
-            db.ensure_discovery_tables()
-            run_id = db.save_discovery_run(5, 10, 2)
-
-            for vid, status in [("AAA", "uploaded"), ("BBB", "pending")]:
-                db._conn.execute("""
-                    INSERT INTO discovery_recommendations
-                        (run_id, keyword, heat_score, youtube_video_id,
-                         youtube_title, youtube_channel, youtube_views,
-                         youtube_likes, youtube_duration_seconds,
-                         relevance_score, predicted_views, predicted_label,
-                         combined_score, status)
-                    VALUES (?, 'test', 100, ?, 'Title', 'ch', 10000, 500, 300,
-                            0.8, 50000, 'successful', 0.8, ?)
-                """, (run_id, vid, status))
-            db._conn.commit()
-
-            picks = db.get_pending_recommendations(limit=5)
-            assert len(picks) == 1
-            assert picks[0]["youtube_video_id"] == "BBB"
-
-    def test_mark_recommendation_uploaded(self, temp_db):
-        """Test marking a recommendation as uploaded."""
-        with Database(temp_db) as db:
-            db.ensure_discovery_tables()
-            run_id = db.save_discovery_run(5, 10, 1)
-
-            db._conn.execute("""
-                INSERT INTO discovery_recommendations
-                    (run_id, keyword, heat_score, youtube_video_id,
-                     youtube_title, youtube_channel, youtube_views,
-                     youtube_likes, youtube_duration_seconds,
-                     relevance_score, predicted_views, predicted_label,
-                     combined_score, status)
-                VALUES (?, 'test', 100, 'VID123', 'Title', 'ch', 10000, 500, 300,
-                        0.8, 50000, 'successful', 0.8, 'pending')
-            """, (run_id,))
-            db._conn.commit()
-
-            # Verify it's pending
-            picks = db.get_pending_recommendations(limit=5)
-            assert len(picks) == 1
-
-            # Mark uploaded
-            db.mark_recommendation_uploaded("VID123")
-
-            # Should no longer appear
-            picks = db.get_pending_recommendations(limit=5)
-            assert len(picks) == 0
-
-            # Verify status in DB
-            row = db._conn.execute(
-                "SELECT status FROM discovery_recommendations WHERE youtube_video_id = ?",
-                ("VID123",)
-            ).fetchone()
-            assert row["status"] == "uploaded"
-
-    def test_limit_respected(self, temp_db):
-        """Test that the limit parameter is respected."""
-        with Database(temp_db) as db:
-            db.ensure_discovery_tables()
-            run_id = db.save_discovery_run(5, 10, 5)
-
-            for i in range(5):
-                db._conn.execute("""
-                    INSERT INTO discovery_recommendations
-                        (run_id, keyword, heat_score, youtube_video_id,
-                         youtube_title, youtube_channel, youtube_views,
-                         youtube_likes, youtube_duration_seconds,
-                         relevance_score, predicted_views, predicted_label,
-                         combined_score, status)
-                    VALUES (?, 'test', 100, ?, 'Title', 'ch', 10000, 500, 300,
-                            0.8, 50000, 'successful', ?, 'pending')
-                """, (run_id, f"VID{i}", 0.5 + i * 0.1))
-            db._conn.commit()
-
-            picks = db.get_pending_recommendations(limit=3)
-            assert len(picks) == 3
-
-    def test_not_connected_raises(self, temp_db):
-        """Test that methods raise when not connected."""
-        db = Database(temp_db)
-        with pytest.raises(RuntimeError, match="Database not connected"):
-            db.get_pending_recommendations()
-        with pytest.raises(RuntimeError, match="Database not connected"):
-            db.mark_recommendation_uploaded("VID123")
-
-
-class TestDatabaseErrors:
-    """Tests for database error handling."""
-
-    def test_operations_fail_without_connection(self, temp_db):
-        """Test that operations fail when database is not connected."""
-        db = Database(temp_db)
-        # Don't call connect()
-
-        with pytest.raises(RuntimeError, match="Database not connected"):
-            db.get_uploads_for_tracking(24)
-
-        with pytest.raises(RuntimeError, match="Database not connected"):
-            db.save_performance(UploadPerformance(
-                id=None, upload_id="test", checkpoint_hours=24,
-                recorded_at=datetime.utcnow(), views=0, likes=0,
-                coins=0, favorites=0, shares=0, danmaku=0,
-                comments=0, view_velocity=0, engagement_rate=0
-            ))
-
-        with pytest.raises(RuntimeError, match="Database not connected"):
-            db.save_outcome(UploadOutcome(
-                id=None, upload_id="test", label="failed",
-                labeled_at=datetime.utcnow(), final_views=0,
-                final_engagement_rate=0, final_coins=0
-            ))
+
+
+def test_persona_tables_created(db):
+    """All 4 new persona tables should exist after ensure_all_tables."""
+    tables = db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    table_names = {r["name"] for r in tables}
+    assert "persona_config" in table_names
+    assert "search_rounds" in table_names
+    assert "review_decisions" in table_names
+    assert "persona_analyses" in table_names
+
+
+def test_skill_tables_created(db):
+    tables = db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    table_names = {r["name"] for r in tables}
+    assert "skills" in table_names
+    assert "skill_versions" in table_names
+    assert "strategies" in table_names
+    assert "strategy_runs" in table_names
+    assert "followed_channels" in table_names
+    assert "scoring_params" in table_names
+
+
+def test_persona_kv_roundtrip(db):
+    db.save_persona_kv("test_persona", "config", '{"model": "qwen2.5:7b"}')
+    result = db.get_persona_kv("test_persona", "config")
+    assert result == '{"model": "qwen2.5:7b"}'
+
+    parsed = json.loads(result)
+    assert parsed["model"] == "qwen2.5:7b"
+
+
+def test_persona_kv_upsert(db):
+    db.save_persona_kv("p1", "key1", '"v1"')
+    db.save_persona_kv("p1", "key1", '"v2"')
+    assert db.get_persona_kv("p1", "key1") == '"v2"'
+
+
+def test_persona_kv_missing(db):
+    assert db.get_persona_kv("nonexistent", "key") is None
+
+
+def test_persona_kv_isolation(db):
+    db.save_persona_kv("p1", "config", '"a"')
+    db.save_persona_kv("p2", "config", '"b"')
+    assert db.get_persona_kv("p1", "config") == '"a"'
+    assert db.get_persona_kv("p2", "config") == '"b"'
+
+
+def test_save_search_round(db):
+    rid = db.save_search_round(
+        persona_id="test",
+        strategy_run_id=None,
+        round_number=0,
+        query="test query",
+        original_query="test query",
+        result_count=5,
+        avg_views=10000,
+        quality_score=0.7,
+        was_refined=False,
+        quota_units_used=100,
+    )
+    assert rid > 0
+
+
+def test_save_review_decision(db):
+    rid = db.save_review_decision(
+        persona_id="test",
+        strategy_run_id=None,
+        youtube_video_id="abc123",
+        strategy_name="gaming_deep_dive",
+        decision="approved",
+        original_title="Test Video",
+        original_desc="Test description",
+    )
+    assert rid > 0
+
+    decisions = db.get_review_decisions("test")
+    assert len(decisions) == 1
+    assert decisions[0]["youtube_video_id"] == "abc123"
+    assert decisions[0]["decision"] == "approved"
+
+
+def test_save_persona_analysis(db):
+    rid = db.save_persona_analysis(
+        persona_id="test",
+        summary_json='{"patterns": []}',
+        total_runs_analyzed=10,
+        success_rate=0.5,
+        updates_applied="updated youtube_principles",
+    )
+    assert rid > 0
+
+
+def test_strategy_run_with_persona_id(db):
+    """strategy_runs now supports persona_id column."""
+    sid = db.add_strategy("test_strat", "test description", persona_id="sarcastic_ai")
+    run_id = db.save_strategy_run(sid, "test query", persona_id="sarcastic_ai")
+    assert run_id > 0
+
+    rows = db._conn.execute(
+        "SELECT persona_id FROM strategy_runs WHERE id = ?", (run_id,)
+    ).fetchall()
+    assert rows[0]["persona_id"] == "sarcastic_ai"
+
+
+def test_strategy_persona_id_isolation(db):
+    """Same strategy name, different persona_id — should both exist."""
+    id1 = db.add_strategy("gaming", "desc1", persona_id="persona_a")
+    id2 = db.add_strategy("gaming", "desc2", persona_id="persona_b")
+    assert id1 != id2
+
+    s1 = db.get_strategy("gaming", persona_id="persona_a")
+    s2 = db.get_strategy("gaming", persona_id="persona_b")
+    assert s1 is not None
+    assert s2 is not None
+    assert s1["description"] == "desc1"
+    assert s2["description"] == "desc2"
+
+
+def test_list_strategies_by_persona(db):
+    db.add_strategy("s1", "d1", persona_id="p1")
+    db.add_strategy("s2", "d2", persona_id="p1")
+    db.add_strategy("s3", "d3", persona_id="p2")
+
+    p1 = db.list_strategies(persona_id="p1")
+    p2 = db.list_strategies(persona_id="p2")
+    assert len(p1) == 2
+    assert len(p2) == 1
+
+
+def test_scoring_params_persona_id(db):
+    db.save_scoring_params('{"test": 1}', source="test", persona_id="p1")
+    db.save_scoring_params('{"test": 2}', source="test", persona_id="p2")
+
+    p1 = db.get_scoring_params(persona_id="p1")
+    p2 = db.get_scoring_params(persona_id="p2")
+    assert p1 is not None
+    assert p2 is not None
+    assert p1["params_json"] == '{"test": 1}'
+    assert p2["params_json"] == '{"test": 2}'
+
+
+def test_get_approved_examples(db):
+    """Approved/revised reviews should be returned, revised first."""
+    db.save_review_decision(
+        persona_id="test", strategy_run_id=None,
+        youtube_video_id="v1", strategy_name="gaming",
+        decision="approved", original_title="Original 1", original_desc="",
+        final_title="Final 1", final_desc="Desc 1",
+    )
+    db.save_review_decision(
+        persona_id="test", strategy_run_id=None,
+        youtube_video_id="v2", strategy_name="tech",
+        decision="revised", original_title="Original 2", original_desc="",
+        final_title="Final 2", final_desc="Desc 2",
+        feedback_rounds_json='[{"feedback": "more tsundere"}]',
+    )
+    db.save_review_decision(
+        persona_id="test", strategy_run_id=None,
+        youtube_video_id="v3", strategy_name="gaming",
+        decision="rejected", original_title="Original 3", original_desc="",
+        reject_reason="bad",
+    )
+
+    examples = db.get_approved_examples("test", limit=10)
+    assert len(examples) == 2
+    # Revised should come first
+    assert examples[0]["decision"] == "revised"
+    assert examples[0]["final_title"] == "Final 2"
+    assert examples[1]["decision"] == "approved"

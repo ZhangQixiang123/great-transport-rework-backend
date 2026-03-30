@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-func channelURL(input string) string {
-	if looksLikeURL(input) {
-		return input
-	}
-	return fmt.Sprintf("https://www.youtube.com/channel/%s/videos", input)
-}
-
 func videoURL(input string) string {
 	if looksLikeURL(input) {
 		return input

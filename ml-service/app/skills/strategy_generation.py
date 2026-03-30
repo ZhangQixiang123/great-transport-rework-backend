@@ -13,11 +13,13 @@ from .base import Skill
 logger = logging.getLogger(__name__)
 
 DEFAULT_YOUTUBE_PRINCIPLES = (
-    "- Specific queries outperform generic ones\n"
-    "- Adding reaction words ('honest review', 'first time trying') finds more engaging content\n"
-    "- Filter by recent uploads (<3 months) to avoid stale content\n"
-    "- YouTube category 22 (People & Blogs) has high transport potential\n"
-    "- Videos with >50K views have higher quality on average"
+    "- Use natural YouTube search phrases, not keyword stuffing\n"
+    "- Vary query style: some short (2-3 words), some conversational\n"
+    "- DO NOT append 'honest review' or 'first time trying' to every query\n"
+    "- Target English-language creators reviewing/reacting to topics\n"
+    "- Include creator names when targeting known channels (e.g. 'MKBHD iPhone')\n"
+    "- YouTube category 20 (Gaming) and 28 (Science & Tech) have high transport potential\n"
+    "- Broader queries return more results than hyper-specific ones"
 )
 
 DEFAULT_BILIBILI_PRINCIPLES = (
@@ -35,20 +37,21 @@ class StrategyGenerationSkill(Skill):
         self.youtube_principles = DEFAULT_YOUTUBE_PRINCIPLES
         self.bilibili_principles = DEFAULT_BILIBILI_PRINCIPLES
         super().__init__(name, db, backend)
-        self._extract_principles()
-
-    def _extract_principles(self) -> None:
-        """Extract youtube/bilibili principles from system prompt."""
-        if "{youtube_principles}" in self._default_system_prompt():
-            # Principles are embedded in the actual system_prompt at render time
-            # Parse them from stored system_prompt if it contains the marker
-            pass
 
     def _default_system_prompt(self) -> str:
         return (
             "You are an expert at finding specific YouTube videos that will succeed when "
             "transported to Bilibili. Your primary job is crafting effective YouTube search "
             "queries -- the right query finds the right video.\n\n"
+            "CRITICAL RULE: ALL YouTube search queries MUST be in English. YouTube's search "
+            "engine works best with English queries, and the target videos are English-language "
+            "content by foreign creators. Never generate Chinese/non-English queries for YouTube. "
+            "The bilibili_check field should be in Chinese (for checking Bilibili saturation).\n\n"
+            "QUERY FORMAT RULE: The query field must be a natural YouTube search string that a "
+            "human would type. NEVER include strategy names, internal labels, or years unless the "
+            "year is genuinely relevant. BAD: 'global_trending_chinese_angle AI news'. "
+            "GOOD: 'why AI is taking over and no one is ready'. The strategy_name field is separate "
+            "— do not embed it in the query.\n\n"
             "YouTube search principles you've learned:\n"
             "{youtube_principles}\n\n"
             "Bilibili audience principles you've learned:\n"
@@ -67,11 +70,19 @@ class StrategyGenerationSkill(Skill):
             "{hot_words}\n\n"
             "## Task\n"
             "Generate 10-20 YouTube search queries. Focus on FINDING good videos:\n"
-            "1. Use query patterns that have historically returned good results\n"
-            "2. Reference specific channels known to produce transportable content\n"
-            "3. Be specific enough to find relevant content, but not so narrow\n"
-            "4. Combine proven strategy angles with current demand signals\n"
-            "5. Avoid query patterns that previously returned poor results\n\n"
+            "1. ALL queries MUST be in English (e.g. 'Chinese motorcycle brand review', "
+            "NOT '国外博主介绍国产摩托车品牌')\n"
+            "2. Use query patterns that have historically returned good results\n"
+            "3. Reference specific channels known to produce transportable content\n"
+            "4. Be specific enough to find relevant content, but not so narrow\n"
+            "5. Combine proven strategy angles with current demand signals\n"
+            "6. Avoid query patterns that previously returned poor results\n"
+            "7. STRICTLY obey each strategy's CONSTRAINT (if any). For example, if a strategy says "
+            "'query MUST mention a Chinese brand', then EVERY query for that strategy must include "
+            "a specific Chinese brand name. Queries that violate constraints will be discarded.\n"
+            "8. NEVER put strategy names or internal labels in the query field. "
+            "BAD: 'chinese_brand_foreign_review Huawei' or 'challenge_experiment building'. "
+            "GOOD: 'Huawei P70 honest review foreigner' or 'I built an impossible bridge challenge'\n\n"
             "Respond with JSON:\n"
             '{{\n'
             '  "queries": [\n'
@@ -112,21 +123,13 @@ class StrategyGenerationSkill(Skill):
         }
 
     def execute(self, context: dict) -> dict:
-        """Generate YouTube search queries.
-
-        Expected context keys:
-            strategies_with_full_context: str
-            recent_outcomes_with_youtube_context: str
-            hot_words: str
-        """
-        # Render system prompt with current principles (if template has placeholders)
+        """Generate YouTube search queries."""
         if "{youtube_principles}" in self.system_prompt:
             rendered_system = self.system_prompt.format(
                 youtube_principles=self.youtube_principles,
                 bilibili_principles=self.bilibili_principles,
             )
         else:
-            # System prompt was already rendered (e.g. after reflection saved it)
             rendered_system = self.system_prompt
 
         prompt = self.prompt_template.format(**context)
@@ -137,19 +140,12 @@ class StrategyGenerationSkill(Skill):
                 {"role": "user", "content": prompt},
             ],
             json_schema=self._output_schema(),
+            temperature=0.9,
         )
         return self._parse_response(response)
 
     def reflect_on_yield(self, yield_data: list, strategy_stats: list) -> Optional[dict]:
-        """Loop 1 reflection: analyze query yield and update YouTube principles.
-
-        Args:
-            yield_data: Recent strategy run results.
-            strategy_stats: Per-strategy yield statistics.
-
-        Returns:
-            Parsed reflection result, or None.
-        """
+        """Loop 1 reflection: analyze query yield and update YouTube principles."""
         if not yield_data:
             return None
 
@@ -186,18 +182,17 @@ class StrategyGenerationSkill(Skill):
                 {"role": "system", "content": "You are analyzing search performance. Respond in JSON."},
                 {"role": "user", "content": reflection_prompt},
             ],
+            temperature=0.3,
         )
         result = self._parse_response(response)
 
         if result.get("updated_youtube_principles"):
             principles = result["updated_youtube_principles"]
-            # LLM may return a list or dict instead of a string — normalize
             if isinstance(principles, list):
                 principles = "\n".join(str(p) for p in principles)
             elif not isinstance(principles, str):
                 principles = str(principles)
             self.youtube_principles = principles
-            # Save the template (with placeholders) so execute() can still format it
             self._update_prompt(
                 {"system_prompt": self._default_system_prompt()},
                 changed_by="yield_reflection",
@@ -207,14 +202,7 @@ class StrategyGenerationSkill(Skill):
         return result
 
     def reflect_on_outcomes(self, outcomes: list) -> Optional[dict]:
-        """Loop 2 reflection: analyze Bilibili outcomes and update audience principles.
-
-        Args:
-            outcomes: List of outcome dicts with transport results.
-
-        Returns:
-            Parsed reflection result, or None.
-        """
+        """Loop 2 reflection: analyze Bilibili outcomes and update audience principles."""
         if not outcomes:
             return None
 
@@ -245,6 +233,7 @@ class StrategyGenerationSkill(Skill):
                 {"role": "system", "content": "You are analyzing transport outcomes. Respond in JSON."},
                 {"role": "user", "content": reflection_prompt},
             ],
+            temperature=0.3,
         )
         result = self._parse_response(response)
 
@@ -255,7 +244,6 @@ class StrategyGenerationSkill(Skill):
             elif not isinstance(principles, str):
                 principles = str(principles)
             self.bilibili_principles = principles
-            # Save the template (with placeholders) so execute() can still format it
             self._update_prompt(
                 {"system_prompt": self._default_system_prompt()},
                 changed_by="outcome_reflection",
@@ -268,7 +256,6 @@ class StrategyGenerationSkill(Skill):
 
     @staticmethod
     def format_strategies_context(strategies: list) -> str:
-        """Format strategy list for prompt context."""
         if not strategies:
             return "(no active strategies)"
         lines = []
@@ -279,16 +266,15 @@ class StrategyGenerationSkill(Skill):
             queries = s.get("example_queries", "[]")
             check = s.get("bilibili_check", "")
             lines.append(
-                f"Strategy: {name} (yield: {yield_rate:.0%})\n"
-                f"  Description: {desc}\n"
-                f"  Example queries: {queries}\n"
-                f"  Bilibili check: {check}"
+                f"[{name}] (yield: {yield_rate:.0%})\n"
+                f"  What to find: {desc}\n"
+                f"  Query style examples: {queries}\n"
+                f"  Bilibili saturation keyword: {check}"
             )
         return "\n\n".join(lines)
 
     @staticmethod
     def format_recent_outcomes(outcomes: list) -> str:
-        """Format recent outcomes for prompt context."""
         if not outcomes:
             return "(no recent outcomes)"
         lines = []
@@ -296,7 +282,7 @@ class StrategyGenerationSkill(Skill):
             status = o.get("outcome", "pending")
             query = o.get("query", "?")
             yt_title = o.get("youtube_title", "?")
-            yt_views = o.get("youtube_views", 0)
+            yt_views = o.get("youtube_views") or 0
             bili_views = o.get("bilibili_views")
             prefix = "[success]" if status == "success" else "[failure]" if status == "failure" else "[pending]"
             line = f"  {prefix} query \"{query}\" -> \"{yt_title}\" (YT: {yt_views:,})"
@@ -307,14 +293,12 @@ class StrategyGenerationSkill(Skill):
 
     @staticmethod
     def format_hot_words(hot_words: list) -> str:
-        """Format hot words/trending keywords for prompt context."""
         if not hot_words:
             return "(no hot words available)"
         return "\n".join(f"  - {hw}" for hw in hot_words[:20])
 
     @staticmethod
     def format_yield_report(yield_data: list) -> str:
-        """Format yield data for reflection prompt."""
         if not yield_data:
             return "(no data)"
         lines = []
@@ -334,7 +318,6 @@ class StrategyGenerationSkill(Skill):
 
     @staticmethod
     def format_strategy_stats(stats: list) -> str:
-        """Format strategy yield stats for reflection prompt."""
         if not stats:
             return "(no stats)"
         lines = []
@@ -348,7 +331,6 @@ class StrategyGenerationSkill(Skill):
 
     @staticmethod
     def format_outcomes(outcomes: list) -> str:
-        """Format transport outcomes for Loop 2 reflection."""
         if not outcomes:
             return "(no outcomes)"
         lines = []
@@ -368,7 +350,6 @@ class StrategyGenerationSkill(Skill):
         return "\n".join(lines)
 
     def _build_reflection_prompt(self, outcomes: list) -> str:
-        """Generic reflection (delegates to specific reflection methods)."""
         return ""
 
     def _parse_reflection(self, result: dict) -> Optional[dict]:

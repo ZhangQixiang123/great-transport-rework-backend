@@ -21,106 +21,11 @@ import (
 const (
 	// A very short test video (~5 seconds) - Big Buck Bunny trailer
 	RealTestVideoID = "aqz-KE-bpKQ" // Big Buck Bunny - short clip
-
-	// A channel with public videos (Blender Foundation - using channel ID format)
-	RealTestChannelURL = "https://www.youtube.com/channel/UCOKHwx1VCdgnxwbjyb9Iu1g/videos"
 )
 
 func skipIfNoYtDlp(t *testing.T) {
 	if !HasExecutable("yt-dlp") {
 		t.Skip("yt-dlp not found in PATH - skipping real download test")
-	}
-}
-
-func TestReal_GetVideoMetadata(t *testing.T) {
-	skipIfNoYtDlp(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	downloader := NewYtDlpDownloader(0)
-	meta, err := downloader.GetVideoMetadata(ctx, RealTestVideoID, "")
-
-	if err != nil {
-		t.Fatalf("GetVideoMetadata failed: %v", err)
-	}
-
-	// Verify metadata fields are populated
-	if meta.ID != RealTestVideoID {
-		t.Errorf("expected video ID %s, got %s", RealTestVideoID, meta.ID)
-	}
-	if meta.Title == "" {
-		t.Error("expected non-empty title")
-	}
-	if meta.Duration <= 0 {
-		t.Errorf("expected positive duration, got %d", meta.Duration)
-	}
-	if meta.ChannelID == "" {
-		t.Error("expected non-empty channel ID")
-	}
-
-	t.Logf("Video Metadata:")
-	t.Logf("  ID: %s", meta.ID)
-	t.Logf("  Title: %s", meta.Title)
-	t.Logf("  Duration: %d seconds", meta.Duration)
-	t.Logf("  Views: %d", meta.ViewCount)
-	t.Logf("  Likes: %d", meta.LikeCount)
-	t.Logf("  Channel: %s (%s)", meta.ChannelTitle, meta.ChannelID)
-	t.Logf("  Categories: %v", meta.Categories)
-	t.Logf("  Tags: %v", meta.Tags)
-}
-
-func TestReal_ListChannelVideoIDs(t *testing.T) {
-	skipIfNoYtDlp(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	downloader := NewYtDlpDownloader(0)
-	ids, err := downloader.ListChannelVideoIDs(ctx, RealTestChannelURL, 5, "")
-
-	if err != nil {
-		t.Fatalf("ListChannelVideoIDs failed: %v", err)
-	}
-
-	if len(ids) == 0 {
-		t.Error("expected at least 1 video ID")
-	}
-
-	t.Logf("Found %d video IDs from channel:", len(ids))
-	for i, id := range ids {
-		t.Logf("  %d. %s", i+1, id)
-	}
-
-	// Verify IDs look valid (11 characters)
-	for _, id := range ids {
-		if len(id) != 11 {
-			t.Errorf("unexpected video ID length: %s (len=%d)", id, len(id))
-		}
-	}
-}
-
-func TestReal_GetChannelVideosMetadata(t *testing.T) {
-	skipIfNoYtDlp(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	downloader := NewYtDlpDownloader(0)
-	videos, err := downloader.GetChannelVideosMetadata(ctx, RealTestChannelURL, 3, "")
-
-	if err != nil {
-		t.Fatalf("GetChannelVideosMetadata failed: %v", err)
-	}
-
-	if len(videos) == 0 {
-		t.Error("expected at least 1 video")
-	}
-
-	t.Logf("Found %d videos with metadata:", len(videos))
-	for i, v := range videos {
-		t.Logf("  %d. %s", i+1, v.Title)
-		t.Logf("     ID: %s, Duration: %ds, Views: %d", v.ID, v.Duration, v.ViewCount)
 	}
 }
 
@@ -165,74 +70,6 @@ func TestReal_DownloadVideo_SmallFile(t *testing.T) {
 			t.Errorf("downloaded file is empty: %s", f)
 		}
 	}
-}
-
-func TestReal_FullPipeline_DiscoverAndDownload(t *testing.T) {
-	skipIfNoYtDlp(t)
-
-	tempDir, err := os.MkdirTemp("", "yt-pipeline-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
-
-	downloader := NewYtDlpDownloader(0)
-
-	// Step 1: Get channel videos metadata
-	t.Log("Step 1: Fetching channel videos metadata...")
-	videos, err := downloader.GetChannelVideosMetadata(ctx, RealTestChannelURL, 2, "")
-	if err != nil {
-		t.Fatalf("GetChannelVideosMetadata failed: %v", err)
-	}
-	if len(videos) == 0 {
-		t.Fatal("no videos found")
-	}
-	t.Logf("  Found %d videos", len(videos))
-
-	// Step 2: Filter by duration (< 60 seconds for faster test)
-	var shortVideo *VideoMetadata
-	for _, v := range videos {
-		t.Logf("  Checking: %s (duration: %ds)", v.Title, v.Duration)
-		if v.Duration > 0 && v.Duration < 120 {
-			shortVideo = &v
-			break
-		}
-	}
-
-	if shortVideo == nil {
-		t.Skip("no short video found for download test - skipping")
-	}
-
-	t.Logf("Step 2: Selected video: %s (%ds)", shortVideo.Title, shortVideo.Duration)
-
-	// Step 3: Download the video
-	t.Log("Step 3: Downloading video...")
-	videoURL := "https://www.youtube.com/watch?v=" + shortVideo.ID
-	files, err := downloader.DownloadVideo(ctx, videoURL, tempDir, "", "worst")
-	if err != nil {
-		t.Fatalf("DownloadVideo failed: %v", err)
-	}
-
-	if len(files) == 0 {
-		t.Fatal("no files downloaded")
-	}
-
-	t.Logf("Step 4: Download complete!")
-	for _, f := range files {
-		info, _ := os.Stat(f)
-		t.Logf("  File: %s (%d bytes)", filepath.Base(f), info.Size())
-	}
-
-	// Summary
-	t.Log("\n=== Pipeline Summary ===")
-	t.Logf("Video ID: %s", shortVideo.ID)
-	t.Logf("Title: %s", shortVideo.Title)
-	t.Logf("Duration: %d seconds", shortVideo.Duration)
-	t.Logf("Views: %d", shortVideo.ViewCount)
-	t.Logf("Downloaded to: %s", tempDir)
 }
 
 // TestReal_DownloadWithFormat tests the download format option
@@ -389,9 +226,9 @@ func TestReal_UploadToBilibili(t *testing.T) {
 	t.Log("NOTE: Please delete this test video from your Bilibili account")
 }
 
-// TestReal_FullPipeline_DownloadFilterUpload tests the complete pipeline
-// Run with: ENABLE_UPLOAD_TEST=1 go test -v ./internal/app -tags=integration -run "TestReal_FullPipeline_DownloadFilterUpload"
-func TestReal_FullPipeline_DownloadFilterUpload(t *testing.T) {
+// TestReal_FullPipeline_SyncVideo tests the SyncVideo controller method end-to-end.
+// Run with: ENABLE_UPLOAD_TEST=1 go test -v ./internal/app -tags=integration -run "TestReal_FullPipeline_SyncVideo"
+func TestReal_FullPipeline_SyncVideo(t *testing.T) {
 	if os.Getenv("ENABLE_UPLOAD_TEST") == "" {
 		t.Skip("Upload test skipped - set ENABLE_UPLOAD_TEST=1 to run (creates real Bilibili video)")
 	}
@@ -449,16 +286,8 @@ func TestReal_FullPipeline_DownloadFilterUpload(t *testing.T) {
 		Format:     "worst",
 	}
 
-	// Step 1: Get video metadata
-	t.Log("Step 1: Fetching video metadata...")
-	meta, err := downloader.GetVideoMetadata(ctx, UploadTestVideoID, "")
-	if err != nil {
-		t.Fatalf("metadata fetch failed: %v", err)
-	}
-	t.Logf("  Video: %s (%d seconds)", meta.Title, meta.Duration)
-
-	// Step 2: Sync (download + upload)
-	t.Log("Step 2: Running sync (download + upload)...")
+	// Step 1: Sync (download + upload)
+	t.Log("Step 1: Running SyncVideo (download + upload)...")
 	err = controller.SyncVideo(ctx, UploadTestVideoID)
 	if err != nil {
 		// Check for rate limiting
@@ -468,22 +297,14 @@ func TestReal_FullPipeline_DownloadFilterUpload(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	// Step 3: Verify it's marked as uploaded
-	t.Log("Step 3: Verifying upload record...")
+	// Step 2: Verify it's marked as uploaded
+	t.Log("Step 2: Verifying upload record...")
 	uploaded, err := store.IsUploaded(ctx, UploadTestVideoID)
 	if err != nil {
 		t.Fatalf("check upload status failed: %v", err)
 	}
 	if !uploaded {
 		t.Error("video should be marked as uploaded")
-	}
-
-	// Step 4: Try to sync again - should skip
-	t.Log("Step 4: Verifying skip logic...")
-	// SyncVideo doesn't return skip info, so we just verify no error
-	err = controller.SyncVideo(ctx, UploadTestVideoID)
-	if err != nil {
-		t.Logf("  Second sync returned error (expected if already uploaded): %v", err)
 	}
 
 	t.Log("\n=== Full Pipeline Test Complete ===")

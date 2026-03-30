@@ -30,7 +30,7 @@ type pipelineJob struct {
 // NewJobQueue creates a new job queue.
 // Subtitle generation is automatically enabled if a BiliupUploader with a
 // cookie path is configured on the controller.
-func NewJobQueue(controller *Controller, store *SQLiteStore) *JobQueue {
+func NewJobQueue(controller *Controller, store *SQLiteStore, annotationURL ...string) *JobQueue {
 	q := &JobQueue{
 		controller: controller,
 		store:      store,
@@ -40,15 +40,25 @@ func NewJobQueue(controller *Controller, store *SQLiteStore) *JobQueue {
 	// Auto-configure subtitle pipeline from existing uploader settings.
 	if bu, ok := controller.Uploader.(*BiliupUploader); ok && bu.opts.CookiePath != "" {
 		q.subtitleCfg = &SubtitlePipelineConfig{
+			PythonBinary:  "ml-service/.venv/Scripts/python",
 			WhisperScript: "scripts/whisper_transcribe.py",
 			WhisperModel:  "base",
 			CookiePath:    bu.opts.CookiePath,
+		}
+		if len(annotationURL) > 0 && annotationURL[0] != "" {
+			q.subtitleCfg.AnnotationURL = annotationURL[0]
+			log.Printf("queue: persona annotation enabled (url=%s)", annotationURL[0])
 		}
 		log.Printf("queue: subtitle pipeline enabled (model=%s, cookie=%s)",
 			q.subtitleCfg.WhisperModel, q.subtitleCfg.CookiePath)
 	}
 
 	return q
+}
+
+// GetSubtitleConfig returns the subtitle pipeline config (nil if not configured).
+func (q *JobQueue) GetSubtitleConfig() *SubtitlePipelineConfig {
+	return q.subtitleCfg
 }
 
 // Enqueue sends a non-blocking notification that a new job is available.
@@ -294,12 +304,11 @@ func (q *JobQueue) doSubtitle(ctx context.Context, jobID int64, bvid, videoPath 
 	subtitleCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
-	if err := RunSubtitlePipeline(subtitleCtx, *q.subtitleCfg, videoPath, bvid); err != nil {
+	if err := RunSubtitlePipeline(subtitleCtx, *q.subtitleCfg, q.store, jobID, videoPath, bvid); err != nil {
 		log.Printf("queue: job %d subtitle failed: %v", jobID, err)
 		_ = q.store.UpdateSubtitleStatus(ctx, jobID, "failed")
 		return
 	}
-
-	_ = q.store.UpdateSubtitleStatus(ctx, jobID, "completed")
-	log.Printf("queue: job %d subtitle completed", jobID)
+	// Pipeline sets status to "review" — awaiting human approval via /upload/subtitle-approve
+	log.Printf("queue: job %d subtitle draft ready for review", jobID)
 }

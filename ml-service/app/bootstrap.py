@@ -9,22 +9,21 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# 8 initial strategies from discovery/strategies.py definitions
 INITIAL_STRATEGIES = [
     {
-        "name": "foreign_appreciation",
-        "description": "Western creators showing genuine appreciation/analysis of Chinese culture, products, food, technology.",
-        "example_queries": json.dumps(["foreigner tries Chinese street food", "western review Chinese EV"]),
-        "youtube_channels": json.dumps(["@thefoodranger", "@xiaomanyc", "@serpentza"]),
-        "youtube_categories": json.dumps([19, 22]),
-        "search_tips": "Add reaction words: 'honest', 'first time', 'tries'.",
-        "bilibili_check": "外国人 中国",
-        "audience_notes": "Chinese audiences love genuine positive reactions.",
+        "name": "gaming_deep_dive",
+        "description": "In-depth game reviews, industry controversies, broken launches, esports drama, competitive gaming analysis. Opinionated content with strong takes.",
+        "example_queries": json.dumps(["Starfield was a disaster honest review", "worst game launches that killed studios", "esports match fixing scandal exposed"]),
+        "youtube_channels": json.dumps(["@AngryJoeShow", "@videogamedunkey", "@SkillUp"]),
+        "youtube_categories": json.dumps([20]),
+        "search_tips": "Focus on controversy, drama, and strong opinions over gameplay footage.",
+        "bilibili_check": "游戏评测 搬运",
+        "audience_notes": "Gaming is huge on Bilibili. Controversy and hot takes drive engagement.",
     },
     {
         "name": "educational_explainer",
         "description": "High-quality educational content on universal topics (science, space, history, engineering).",
-        "example_queries": json.dumps(["how black holes work explained", "engineering mega projects"]),
+        "example_queries": json.dumps(["why the ocean is still unexplored", "how bridges are built over deep water", "the engineering behind the tallest building"]),
         "youtube_channels": json.dumps(["@kurzgesagt", "@veritasium", "@3blue1brown"]),
         "youtube_categories": json.dumps([27, 28]),
         "search_tips": "Visual-heavy, language-independent content works best.",
@@ -32,19 +31,19 @@ INITIAL_STRATEGIES = [
         "audience_notes": "Bilibili has a strong science/knowledge community.",
     },
     {
-        "name": "cultural_comparison",
-        "description": "Respectful comparison of how things differ between cultures.",
-        "example_queries": json.dumps(["daily life difference America China", "school system comparison"]),
-        "youtube_channels": json.dumps([]),
-        "youtube_categories": json.dumps([22, 24]),
-        "search_tips": "Focus on respectful, balanced comparisons.",
-        "bilibili_check": "中外对比",
-        "audience_notes": "Audiences love seeing daily life differences.",
+        "name": "tech_teardown",
+        "description": "In-depth electronics reviews, product teardowns, tech comparisons, planned obsolescence exposés, right-to-repair advocacy. Strong opinions, not unboxing fluff.",
+        "example_queries": json.dumps(["iPhone teardown actual cost to make", "why your phone slows down on purpose", "right to repair Apple lost"]),
+        "youtube_channels": json.dumps(["@JerryRigEverything", "@LouisRossmann", "@MKBHD"]),
+        "youtube_categories": json.dumps([28]),
+        "search_tips": "Look for teardowns, exposés, and strong consumer advocacy angles.",
+        "bilibili_check": "数码评测 搬运",
+        "audience_notes": "Tech criticism and consumerism critique resonate strongly.",
     },
     {
         "name": "chinese_brand_foreign_review",
         "description": "Foreign creators reviewing Chinese brands/products (Huawei, BYD, Xiaomi, DJI).",
-        "example_queries": json.dumps(["BYD review honest", "Huawei phone review 2026"]),
+        "example_queries": json.dumps(["BYD seal test drive honest opinion", "foreigner tries Xiaomi for the first time", "DJI drone vs American competitor"]),
         "youtube_channels": json.dumps(["@mkbhd", "@mrwhosetheboss"]),
         "youtube_categories": json.dumps([28]),
         "search_tips": "Chinese audiences love seeing international recognition of Chinese brands.",
@@ -52,29 +51,29 @@ INITIAL_STRATEGIES = [
         "audience_notes": "National pride content performs well.",
     },
     {
-        "name": "skill_talent_showcase",
-        "description": "Pure skill/talent videos — music, art, cooking, engineering, sports.",
-        "example_queries": json.dumps(["incredible woodworking project", "street musician amazing performance"]),
+        "name": "social_commentary",
+        "description": "Societal debates, internet culture analysis, social experiments, workplace/generational issues.",
+        "example_queries": json.dumps(["giving strangers $1000 to see what happens", "why nobody talks to each other anymore", "the loneliness epidemic is getting worse"]),
         "youtube_channels": json.dumps([]),
-        "youtube_categories": json.dumps([10, 26]),
-        "search_tips": "Visual content that transcends language barriers.",
-        "bilibili_check": "技术流 外国",
-        "audience_notes": "Skill-based content has universal appeal.",
+        "youtube_categories": json.dumps([22, 24, 25]),
+        "search_tips": "Look for creators who take strong stances on divisive topics.",
+        "bilibili_check": "社会现象 外网",
+        "audience_notes": "Controversy drives bullet comments. The more debatable the better.",
     },
     {
-        "name": "behind_the_scenes",
-        "description": "Factory tours, movie production, game development BTS.",
-        "example_queries": json.dumps(["how factory makes product", "game development behind scenes"]),
-        "youtube_channels": json.dumps([]),
-        "youtube_categories": json.dumps([28, 22]),
-        "search_tips": "Satisfying, visual, universally appealing process content.",
-        "bilibili_check": "幕后 制作过程",
-        "audience_notes": "BTS content satisfies curiosity-driven audiences.",
+        "name": "geopolitics_hot_take",
+        "description": "International relations analysis, trade war breakdowns, sanctions impact, military/defense commentary. Political hot takes Chinese audiences care about.",
+        "example_queries": json.dumps(["why US sanctions are backfiring explained", "the real reason China is winning in Africa", "NATO expansion consequences nobody talks about"]),
+        "youtube_channels": json.dumps(["@CaspianReport", "@PolyMatter", "@RealLifeLore"]),
+        "youtube_categories": json.dumps([25, 27]),
+        "search_tips": "Geopolitical analysis with clear takes, not dry news recaps.",
+        "bilibili_check": "国际政治 分析",
+        "audience_notes": "Chinese audiences deeply engaged with geopolitics, especially US-China dynamics.",
     },
     {
         "name": "challenge_experiment",
         "description": "Scientific experiments, building challenges, survival projects.",
-        "example_queries": json.dumps(["building challenge extreme", "science experiment unexpected result"]),
+        "example_queries": json.dumps(["I survived 24 hours in the wilderness with nothing", "building the strongest bridge out of popsicle sticks", "what happens if you microwave everything"]),
         "youtube_channels": json.dumps(["@markrober", "@mrBeast"]),
         "youtube_categories": json.dumps([24, 28]),
         "search_tips": "High entertainment value, visual, universal appeal.",
@@ -84,45 +83,37 @@ INITIAL_STRATEGIES = [
     {
         "name": "global_trending_chinese_angle",
         "description": "Global trending events/topics analyzed from a perspective that resonates with Chinese audiences.",
-        "example_queries": json.dumps(["tech industry analysis 2026", "AI impact society"]),
+        "example_queries": json.dumps(["why everyone is mass quitting their jobs", "the AI tool that replaced 300 workers", "Boeing keeps getting worse and nobody cares"]),
         "youtube_channels": json.dumps([]),
         "youtube_categories": json.dumps([25, 28]),
         "search_tips": "Tech drama and industry analysis get high engagement.",
         "bilibili_check": "外网热议",
         "audience_notes": "Chinese audiences want to see global perspectives.",
     },
+    {
+        "name": "surveillance_dashcam",
+        "description": "Dashcam footage, surveillance clips, livestream fails/wins. The 神人TV genre.",
+        "example_queries": json.dumps(["dashcam footage you won't believe is real", "security camera caught the most insane moment", "forklift operator destroys entire warehouse"]),
+        "youtube_channels": json.dumps(["@FailArmy", "@DashCamNation"]),
+        "youtube_categories": json.dumps([24, 22]),
+        "search_tips": "Compilations and single-clip viral moments. Language-free, pure visual entertainment.",
+        "bilibili_check": "监控 实况 神操作",
+        "audience_notes": "Perfect for bullet-screen commentary. No language barrier, high shareability.",
+    },
 ]
 
 
 def run_bootstrap(db, backend=None, skip_llm: bool = False) -> dict:
-    """Run the full bootstrap sequence.
-
-    Args:
-        db: Connected Database instance.
-        backend: Optional LLMBackend for principle generation.
-        skip_llm: If True, skip LLM calls (use defaults).
-
-    Returns:
-        Summary dict of what was bootstrapped.
-    """
+    """Run the full bootstrap sequence."""
     result = {"strategies_seeded": 0, "channels_seeded": 0, "scoring_bootstrapped": False}
 
-    # Step 1: Ensure tables exist
-    db.ensure_skill_tables()
+    db.ensure_all_tables()
 
-    # Step 2: Seed strategies
     result["strategies_seeded"] = _seed_strategies(db)
-
-    # Step 3: Bootstrap scoring params
     result["scoring_bootstrapped"] = _bootstrap_scoring(db)
-
-    # Step 4: Seed followed channels
     result["channels_seeded"] = _seed_followed_channels(db)
-
-    # Step 5: Seed default skill entries
     _seed_skills(db)
 
-    # Step 6: Optionally use LLM to analyze data and write initial principles
     if backend and not skip_llm:
         result["llm_principles"] = _bootstrap_principles(db, backend)
     else:
@@ -133,23 +124,20 @@ def run_bootstrap(db, backend=None, skip_llm: bool = False) -> dict:
 
 def _seed_skills(db) -> None:
     """Seed default skill entries so skill-show works immediately."""
-    from .skills.strategy_generation import StrategyGenerationSkill
-    from .skills.market_analysis import MarketAnalysisSkill
+    from app.skills.strategy_generation import StrategyGenerationSkill
+    from app.skills.market_analysis import MarketAnalysisSkill
 
     for SkillClass in [StrategyGenerationSkill, MarketAnalysisSkill]:
-        # Instantiate with a dummy backend — this triggers _load_from_db
-        # which seeds defaults if not found
         class _DummyBackend:
-            def chat(self, messages, json_schema=None):
+            def chat(self, messages, json_schema=None, temperature=None):
                 return '{}'
         try:
             SkillClass(db=db, backend=_DummyBackend())
         except Exception:
-            pass  # Skill may already exist
+            pass
 
 
 def _seed_strategies(db) -> int:
-    """Seed the 8 initial strategies from hardcoded definitions."""
     count = 0
     for s in INITIAL_STRATEGIES:
         existing = db.get_strategy(s["name"])
@@ -171,24 +159,36 @@ def _seed_strategies(db) -> int:
     return count
 
 
+def refresh_strategies(db) -> int:
+    """Update existing strategies' example_queries from code constants."""
+    updated = 0
+    for s in INITIAL_STRATEGIES:
+        existing = db.get_strategy(s["name"])
+        if not existing:
+            continue
+        new_queries = s.get("example_queries")
+        if new_queries and existing.get("example_queries") != new_queries:
+            db.update_strategy_metadata(s["name"], example_queries=new_queries)
+            logger.info("Refreshed example_queries for '%s'", s["name"])
+            updated += 1
+    return updated
+
+
 def _bootstrap_scoring(db) -> bool:
-    """Bootstrap scoring parameters from competitor data."""
     try:
-        from .scoring.heuristic import bootstrap_scoring_params
+        from app.scoring.heuristic import bootstrap_scoring_params
         params = bootstrap_scoring_params(db, source="competitor")
         db.save_scoring_params(params.to_json(), source="competitor")
         logger.info("Bootstrapped scoring params: threshold=%d", params.bilibili_success_threshold)
         return True
     except Exception as e:
         logger.warning("Scoring bootstrap failed (no data?): %s", e)
-        # Save defaults
-        from .scoring.heuristic import ScoringParams
+        from app.scoring.heuristic import ScoringParams
         db.save_scoring_params(ScoringParams().to_json(), source="default")
         return False
 
 
 def _seed_followed_channels(db) -> int:
-    """Seed followed channels from competitor transport data."""
     if not db._conn:
         return 0
 
@@ -204,7 +204,6 @@ def _seed_followed_channels(db) -> int:
             ORDER BY transport_count DESC
         """).fetchall()
     except Exception:
-        # youtube_stats table may not exist
         logger.info("No youtube_stats data — skipping channel seeding.")
         return 0
 
@@ -224,11 +223,9 @@ def _seed_followed_channels(db) -> int:
 
 
 def _bootstrap_principles(db, backend) -> bool:
-    """Use LLM to analyze historical data and write initial skill principles."""
     if not db._conn:
         return False
 
-    # Aggregate competitor data for LLM analysis
     try:
         rows = db._conn.execute("""
             SELECT ys.yt_category_id, ys.yt_channel_title,
@@ -247,7 +244,6 @@ def _bootstrap_principles(db, backend) -> bool:
 
     rows = [dict(r) for r in rows]
 
-    # Compute simple aggregates
     total = len(rows)
     categories = {}
     for r in rows:
@@ -284,8 +280,7 @@ def _bootstrap_principles(db, backend) -> bool:
         )
         result = json.loads(response)
 
-        # Store as the initial skill prompts
-        from .skills.strategy_generation import StrategyGenerationSkill, DEFAULT_YOUTUBE_PRINCIPLES, DEFAULT_BILIBILI_PRINCIPLES
+        from app.skills.strategy_generation import DEFAULT_YOUTUBE_PRINCIPLES, DEFAULT_BILIBILI_PRINCIPLES
         yt_principles = result.get("youtube_principles", DEFAULT_YOUTUBE_PRINCIPLES)
         bili_principles = result.get("bilibili_principles", DEFAULT_BILIBILI_PRINCIPLES)
 
@@ -300,15 +295,6 @@ def _bootstrap_principles(db, backend) -> bool:
             "Respond in the exact JSON format requested."
         )
 
-        db.upsert_skill(
-            "strategy_generation",
-            system_prompt,
-            StrategyGenerationSkill(
-                db=db, backend=backend
-            ).prompt_template if False else "",  # Don't recurse
-            json.dumps({"type": "object"}),
-        )
-        # Actually let's just update the system prompt directly
         skill_row = db.get_skill("strategy_generation")
         if skill_row:
             db.update_skill_prompt(

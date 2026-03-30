@@ -18,12 +18,14 @@ class LLMBackend(Protocol):
         self,
         messages: list[dict[str, str]],
         json_schema: Optional[Dict[str, Any]] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """Send messages and return the assistant's text response.
 
         Args:
             messages: List of {"role": ..., "content": ...} dicts.
             json_schema: Optional JSON schema for structured output.
+            temperature: Optional sampling temperature (None = backend default).
 
         Returns:
             The assistant's response text.
@@ -34,7 +36,7 @@ class LLMBackend(Protocol):
 class OllamaBackend:
     """Local Ollama backend — calls ollama.chat() with optional JSON schema."""
 
-    def __init__(self, model: str = "qwen2.5:7b"):
+    def __init__(self, model: str = "qwen2.5:14b"):
         self.model = model
         self._verify_connection()
 
@@ -58,6 +60,7 @@ class OllamaBackend:
         self,
         messages: list[dict[str, str]],
         json_schema: Optional[Dict[str, Any]] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         import ollama
 
@@ -67,6 +70,8 @@ class OllamaBackend:
         }
         if json_schema is not None:
             kwargs["format"] = json_schema
+        if temperature is not None:
+            kwargs["options"] = {"temperature": temperature}
 
         response = ollama.chat(**kwargs)
         return response.message.content
@@ -113,16 +118,18 @@ class CloudBackend:
         self,
         messages: list[dict[str, str]],
         json_schema: Optional[Dict[str, Any]] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         if self.provider == "openai":
-            return self._chat_openai(messages, json_schema)
+            return self._chat_openai(messages, json_schema, temperature)
         else:
-            return self._chat_anthropic(messages, json_schema)
+            return self._chat_anthropic(messages, json_schema, temperature)
 
     def _chat_openai(
         self,
         messages: list[dict[str, str]],
         json_schema: Optional[Dict[str, Any]],
+        temperature: Optional[float] = None,
     ) -> str:
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -130,6 +137,8 @@ class CloudBackend:
         }
         if json_schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         response = self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
@@ -138,6 +147,7 @@ class CloudBackend:
         self,
         messages: list[dict[str, str]],
         json_schema: Optional[Dict[str, Any]],
+        temperature: Optional[float] = None,
     ) -> str:
         # Anthropic uses system prompt separately
         system_text = ""
@@ -158,6 +168,8 @@ class CloudBackend:
         }
         if system_text:
             kwargs["system"] = system_text
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         response = self._client.messages.create(**kwargs)
         return response.content[0].text

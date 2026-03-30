@@ -9,19 +9,6 @@ import (
 	"time"
 )
 
-type syncRequest struct {
-	ChannelID string `json:"channel_id"`
-	Limit     int    `json:"limit"`
-}
-
-type syncResponse struct {
-	Considered int    `json:"considered"`
-	Skipped    int    `json:"skipped"`
-	Downloaded int    `json:"downloaded"`
-	Uploaded   int    `json:"uploaded"`
-	Error      string `json:"error,omitempty"`
-}
-
 type uploadRequest struct {
 	VideoID     string `json:"video_id"`
 	Title       string `json:"title"`
@@ -51,42 +38,6 @@ type jobStatusResponse struct {
 
 func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/sync", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req syncRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
-			return
-		}
-		if req.ChannelID == "" || req.Limit <= 0 {
-			http.Error(w, "channel_id and positive limit required", http.StatusBadRequest)
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-		defer cancel()
-
-		res, err := controller.SyncChannel(ctx, req.ChannelID, req.Limit)
-		payload := syncResponse{
-			Considered: res.Considered,
-			Skipped:    res.Skipped,
-			Downloaded: res.Downloaded,
-			Uploaded:   res.Uploaded,
-		}
-		if err != nil {
-			payload.Error = err.Error()
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			w.WriteHeader(http.StatusOK)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(payload); err != nil {
-			log.Printf("failed to write response: %v", err)
-		}
-	})
 
 	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -100,6 +51,30 @@ func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 		}
 		if req.VideoID == "" {
 			http.Error(w, "video_id is required", http.StatusBadRequest)
+			return
+		}
+
+		// Dedup: check uploads table
+		uploaded, err := controller.Store.IsUploaded(r.Context(), req.VideoID)
+		if err != nil {
+			log.Printf("dedup check error (uploads): %v", err)
+		} else if uploaded {
+			resp := uploadResponse{Status: "duplicate", Error: "video already uploaded"}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Dedup: check upload_jobs table for active (non-failed) job
+		activeJob, err := controller.Store.FindActiveUploadJob(r.Context(), req.VideoID)
+		if err != nil {
+			log.Printf("dedup check error (jobs): %v", err)
+		} else if activeJob != nil {
+			resp := uploadResponse{JobID: activeJob.ID, Status: "duplicate", Error: "video already has an active job"}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(resp)
 			return
 		}
 
@@ -209,6 +184,153 @@ func ServeHTTP(addr string, controller *Controller, queue *JobQueue) error {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/upload/retry-subtitle", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			http.Error(w, "id query parameter is required", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		job, err := controller.Store.GetUploadJob(r.Context(), id)
+		if err != nil || job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		if job.BilibiliBvid == "" {
+			http.Error(w, "job has no bilibili bvid", http.StatusBadRequest)
+			return
+		}
+
+		// Parse download files
+		var files []string
+		if err := json.Unmarshal([]byte(job.DownloadFiles), &files); err != nil || len(files) == 0 {
+			http.Error(w, "no download files", http.StatusBadRequest)
+			return
+		}
+
+		// Get subtitle config from queue
+		subtitleCfg := queue.GetSubtitleConfig()
+		if subtitleCfg == nil {
+			http.Error(w, "subtitle pipeline not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Run in background — generates draft for review, does NOT upload
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			controller.Store.UpdateSubtitleStatus(ctx, job.ID, "generating")
+			if err := RunSubtitlePipeline(ctx, *subtitleCfg, controller.Store, job.ID, files[0], job.BilibiliBvid); err != nil {
+				log.Printf("retry-subtitle: failed for job %d: %v", job.ID, err)
+				controller.Store.UpdateSubtitleStatus(ctx, job.ID, "failed")
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "generating",
+			"job_id": job.ID,
+			"bvid":   job.BilibiliBvid,
+		})
+	})
+
+	mux.HandleFunc("/upload/uploaded-ids", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ids, err := controller.Store.GetAllUploadedVideoIDs(r.Context())
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ids)
+	})
+
+	// GET /upload/subtitle-preview?id=N — preview subtitle draft before publishing
+	mux.HandleFunc("/upload/subtitle-preview", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		draftJSON, err := controller.Store.GetSubtitleDraft(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		// Return the raw draft JSON (contains english_srt, chinese_srt, annotations)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(draftJSON))
+	})
+
+	// POST /upload/subtitle-approve?id=N — approve and publish subtitle + danmaku
+	mux.HandleFunc("/upload/subtitle-approve", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		job, err := controller.Store.GetUploadJob(r.Context(), id)
+		if err != nil || job == nil {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		if job.BilibiliBvid == "" {
+			http.Error(w, "job has no bilibili bvid", http.StatusBadRequest)
+			return
+		}
+
+		subtitleCfg := queue.GetSubtitleConfig()
+		if subtitleCfg == nil {
+			http.Error(w, "subtitle pipeline not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := ApproveSubtitle(ctx, *subtitleCfg, controller.Store, job.ID, job.BilibiliBvid); err != nil {
+				log.Printf("subtitle-approve: failed for job %d: %v", job.ID, err)
+				controller.Store.UpdateSubtitleStatus(ctx, job.ID, "failed")
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "approving",
+			"job_id": job.ID,
+			"bvid":   job.BilibiliBvid,
+		})
 	})
 
 	log.Printf("controller listening on %s", addr)

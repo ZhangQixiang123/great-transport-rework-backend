@@ -1,3 +1,4 @@
-"""Outcome tracking — feedback loops for skill improvement."""
+"""Re-export from _shared (backward compatibility)."""
+from app.personas._shared.outcomes import OutcomeTracker
 
-from .tracker import OutcomeTracker
+__all__ = ["OutcomeTracker"]

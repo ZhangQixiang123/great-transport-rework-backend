@@ -10,9 +10,6 @@ import (
 
 type fakeDownloader struct{}
 
-func (d fakeDownloader) ListChannelVideoIDs(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]string, error) {
-	return nil, nil
-}
 func (d fakeDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir string, jsRuntime, format string) ([]string, error) {
 	// Simulate downloading by creating a temp file.
 	f, err := os.CreateTemp(outputDir, "video-*.mp4")
@@ -21,12 +18,6 @@ func (d fakeDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir s
 	}
 	f.Close()
 	return []string{f.Name()}, nil
-}
-func (d fakeDownloader) GetVideoMetadata(ctx context.Context, videoID string, jsRuntime string) (*VideoMetadata, error) {
-	return nil, nil
-}
-func (d fakeDownloader) GetChannelVideosMetadata(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]VideoMetadata, error) {
-	return nil, nil
 }
 
 type fakeUploader struct{}
@@ -184,9 +175,6 @@ type slowDownloader struct {
 	delay  time.Duration
 }
 
-func (d *slowDownloader) ListChannelVideoIDs(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]string, error) {
-	return nil, nil
-}
 func (d *slowDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir string, jsRuntime, format string) ([]string, error) {
 	d.mu.Lock()
 	d.starts = append(d.starts, time.Now())
@@ -204,12 +192,6 @@ func (d *slowDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir 
 	}
 	f.Close()
 	return []string{f.Name()}, nil
-}
-func (d *slowDownloader) GetVideoMetadata(ctx context.Context, videoID string, jsRuntime string) (*VideoMetadata, error) {
-	return nil, nil
-}
-func (d *slowDownloader) GetChannelVideosMetadata(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]VideoMetadata, error) {
-	return nil, nil
 }
 
 // slowUploader records when each upload starts and sleeps for a duration.

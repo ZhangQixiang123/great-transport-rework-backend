@@ -2,15 +2,6 @@ package app
 
 import "testing"
 
-func TestChannelURL(t *testing.T) {
-	if got := channelURL("https://example.com/channel/abc"); got != "https://example.com/channel/abc" {
-		t.Fatalf("expected passthrough for URL, got %s", got)
-	}
-	if got := channelURL("UCxyz"); got != "https://www.youtube.com/channel/UCxyz/videos" {
-		t.Fatalf("unexpected channel URL: %s", got)
-	}
-}
-
 func TestVideoURL(t *testing.T) {
 	if got := videoURL("https://youtu.be/abc"); got != "https://youtu.be/abc" {
 		t.Fatalf("expected passthrough for URL, got %s", got)

@@ -173,6 +173,54 @@ func srtToBCC(srtText string) *bccSubtitle {
 	}
 }
 
+// bilingualSRTToBCC merges English and Chinese SRT into a single BCC
+// with each entry showing "中文\nEnglish" (Chinese on top line).
+func bilingualSRTToBCC(englishSRT, chineseSRT string) *bccSubtitle {
+	enBlocks := parseSRTBlocks(englishSRT)
+	zhBlocks := parseSRTBlocks(chineseSRT)
+
+	// Build a map from index to Chinese text
+	zhMap := make(map[int]string)
+	for i, b := range zhBlocks {
+		zhMap[i] = b.text
+	}
+
+	var body []bccEntry
+	for i, en := range enBlocks {
+		parts := srtTimestampRe.FindStringSubmatch(en.timestamp)
+		if parts == nil || len(parts) < 3 {
+			continue
+		}
+		start := parseSRTTimestamp(parts[1])
+		end := parseSRTTimestamp(parts[2])
+
+		enText := htmlTagRe.ReplaceAllString(en.text, "")
+		zhText := zhMap[i]
+		if zhText == "" {
+			zhText = enText // fallback to English if no translation
+		}
+
+		// Chinese first (main), English second (smaller visual weight)
+		content := zhText + "\n" + enText
+
+		body = append(body, bccEntry{
+			From:     math.Round(start*1000) / 1000,
+			To:       math.Round(end*1000) / 1000,
+			Location: 2,
+			Content:  content,
+		})
+	}
+
+	return &bccSubtitle{
+		FontSize:        0.4,
+		FontColor:       "#FFFFFF",
+		BackgroundAlpha: 0.5,
+		BackgroundColor: "#9C27B0",
+		Stroke:          "none",
+		Body:            body,
+	}
+}
+
 // uploadSubtitleToBilibili uploads SRT content as CC subtitles to a Bilibili video.
 func uploadSubtitleToBilibili(bvid, srtContent, cookiePath string) error {
 	creds, err := loadBilibiliCookies(cookiePath)
@@ -198,7 +246,7 @@ func uploadSubtitleToBilibili(bvid, srtContent, cookiePath string) error {
 	form := url.Values{
 		"type":   {"1"},
 		"oid":    {strconv.FormatInt(cid, 10)},
-		"lan":    {"zh-Hans"},
+		"lan":    {"zh"},
 		"bvid":   {bvid},
 		"submit": {"true"},
 		"sign":   {"false"},

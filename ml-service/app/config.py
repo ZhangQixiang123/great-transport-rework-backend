@@ -1,3 +1,3 @@
-"""Shared configuration constants for the ML service."""
+"""Shared configuration constants."""
 
-YOUTUBE_API_KEY = "AIzaSyAvCrdRnFYXwya6MIEdcN9jv4V-SxFYu1U"
+YOUTUBE_API_KEY = "AIzaSyBuTXe9xaFU8Lrj5Q0gS6pfXrSyHpaanZ0"

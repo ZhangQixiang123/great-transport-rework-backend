@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -16,27 +15,7 @@ import (
 )
 
 type Downloader interface {
-	ListChannelVideoIDs(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]string, error)
 	DownloadVideo(ctx context.Context, videoURL, outputDir string, jsRuntime, format string) ([]string, error)
-	GetVideoMetadata(ctx context.Context, videoID string, jsRuntime string) (*VideoMetadata, error)
-	GetChannelVideosMetadata(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]VideoMetadata, error)
-}
-
-// VideoMetadata contains full metadata for a YouTube video.
-type VideoMetadata struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Duration     int      `json:"duration"`
-	ViewCount    int      `json:"view_count"`
-	LikeCount    int      `json:"like_count"`
-	CommentCount int      `json:"comment_count"`
-	UploadDate   string   `json:"upload_date"`
-	Thumbnail    string   `json:"thumbnail"`
-	Tags         []string `json:"tags"`
-	Categories   []string `json:"categories"`
-	ChannelID    string   `json:"channel_id"`
-	ChannelTitle string   `json:"channel"`
 }
 
 type YtDlpDownloader struct {
@@ -47,37 +26,6 @@ func NewYtDlpDownloader(sleep time.Duration) *YtDlpDownloader {
 	return &YtDlpDownloader{sleep: sleep}
 }
 
-func (d *YtDlpDownloader) ListChannelVideoIDs(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]string, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("limit must be > 0")
-	}
-	args := []string{
-		"--quiet",
-		"--no-warnings",
-		"--no-check-certificates",
-		"--flat-playlist",
-		"--print", "id",
-		"--playlist-items", fmt.Sprintf("1:%d", limit),
-		"--remote-components", "ejs:github",
-		channelURL,
-	}
-	if jsRuntime != "" {
-		args = append(args[:len(args)-1], "--js-runtimes", jsRuntime, channelURL)
-	}
-	lines, err := runYtDlpLines(ctx, args)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if line != "" {
-			ids = append(ids, line)
-		}
-	}
-	return ids, nil
-}
-
-// TODO: can return NA as path
 func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir string, jsRuntime, format string) ([]string, error) {
 	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
 	baseArgs := []string{
@@ -99,8 +47,6 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 	if format != "" {
 		baseArgs = append(baseArgs, "--format", format)
 	}
-	// Subtitles are optional — skip if rate-limited (429) to avoid failing the download.
-	// Uncomment to enable: "--write-auto-sub", "--sub-lang", "zh-Hans", "--convert-subs", "srt",
 
 	if d.sleep > 0 {
 		baseArgs = append(baseArgs,
@@ -134,23 +80,6 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 		}
 	}
 	return files, nil
-}
-
-func runYtDlpLines(ctx context.Context, args []string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	cmd.Env = ytDlpEnv()
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("yt-dlp failed: %w", err)
-	}
-	lines := []string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines, nil
 }
 
 type ytDlpResult struct {
@@ -195,6 +124,23 @@ func runYtDlp(ctx context.Context, args []string) (ytDlpResult, error) {
 		return ytDlpResult{files: files, stderr: stderrBuf.String()}, err
 	}
 	return ytDlpResult{files: files, stderr: stderrBuf.String()}, nil
+}
+
+func runYtDlpLines(ctx context.Context, args []string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	cmd.Env = ytDlpEnv()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("yt-dlp failed: %w", err)
+	}
+	lines := []string{}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
 }
 
 func resolveExistingFiles(ctx context.Context, videoURL, outputTemplate, jsRuntime, format string) ([]string, error) {
@@ -261,86 +207,4 @@ func shouldRetryWithDynamic(stderr string, runErr error) bool {
 		}
 	}
 	return false
-}
-
-// GetVideoMetadata retrieves full metadata for a single video.
-func (d *YtDlpDownloader) GetVideoMetadata(ctx context.Context, videoID string, jsRuntime string) (*VideoMetadata, error) {
-	videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
-	args := []string{
-		"--quiet",
-		"--no-warnings",
-		"--no-check-certificates",
-		"--dump-json",
-		"--skip-download",
-		"--remote-components", "ejs:github",
-	}
-	if jsRuntime != "" {
-		args = append(args, "--js-runtimes", jsRuntime)
-	}
-	args = append(args, videoURL)
-
-	output, err := runYtDlpOutput(ctx, args)
-	if err != nil {
-		return nil, err
-	}
-
-	var meta VideoMetadata
-	if err := json.Unmarshal(output, &meta); err != nil {
-		return nil, fmt.Errorf("parse metadata: %w", err)
-	}
-	return &meta, nil
-}
-
-// GetChannelVideosMetadata retrieves metadata for videos from a channel.
-func (d *YtDlpDownloader) GetChannelVideosMetadata(ctx context.Context, channelURL string, limit int, jsRuntime string) ([]VideoMetadata, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("limit must be > 0")
-	}
-	args := []string{
-		"--quiet",
-		"--no-warnings",
-		"--no-check-certificates",
-		"--dump-json",
-		"--skip-download",
-		"--playlist-items", fmt.Sprintf("1:%d", limit),
-		"--remote-components", "ejs:github",
-	}
-	if jsRuntime != "" {
-		args = append(args, "--js-runtimes", jsRuntime)
-	}
-	args = append(args, channelURL)
-
-	output, err := runYtDlpOutput(ctx, args)
-	if err != nil {
-		return nil, err
-	}
-
-	// yt-dlp outputs one JSON object per line (JSONL format)
-	var videos []VideoMetadata
-	for _, line := range bytes.Split(output, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var meta VideoMetadata
-		if err := json.Unmarshal(line, &meta); err != nil {
-			log.Printf("warning: failed to parse video metadata line: %v", err)
-			continue
-		}
-		videos = append(videos, meta)
-	}
-	return videos, nil
-}
-
-func runYtDlpOutput(ctx context.Context, args []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	cmd.Env = ytDlpEnv()
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("yt-dlp failed: %w: %s", err, string(exitErr.Stderr))
-		}
-		return nil, fmt.Errorf("yt-dlp failed: %w", err)
-	}
-	return output, nil
 }
