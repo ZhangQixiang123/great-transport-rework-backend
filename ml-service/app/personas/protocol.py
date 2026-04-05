@@ -18,6 +18,7 @@ class RunContext(BaseModel):
     go_url: str = "http://localhost:8081"
     global_seen_ids: set[str] = Field(default_factory=set)
     quota_budget: int = 2000
+    selected_strategies: set[str] | None = None  # None = all strategies
 
 
 class RunResult(BaseModel):

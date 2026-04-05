@@ -144,13 +144,35 @@ class StrategyGenerationSkill(Skill):
         )
         return self._parse_response(response)
 
-    def reflect_on_yield(self, yield_data: list, strategy_stats: list) -> Optional[dict]:
-        """Loop 1 reflection: analyze query yield and update YouTube principles."""
+    def reflect_on_yield(self, yield_data: list, strategy_stats: list,
+                         review_stats: list | None = None,
+                         apply: bool = False) -> Optional[dict]:
+        """Loop 1 reflection: analyze query yield and propose YouTube principle updates.
+
+        When apply=False (default), returns proposed changes without saving.
+        When apply=True, saves changes to DB immediately.
+        """
         if not yield_data:
             return None
 
         query_yield_report = self.format_yield_report(yield_data)
         strategy_yield_stats = self.format_strategy_stats(strategy_stats)
+
+        review_section = ""
+        if review_stats:
+            lines = ["| 策略 | 总数 | 通过 | 拒绝 | 通过率 |",
+                      "|------|------|------|------|--------|"]
+            for row in review_stats:
+                lines.append(
+                    f"| {row['strategy_name']} | {row['total']} | "
+                    f"{row['approved']} | {row['rejected']} | {row['approval_rate']}% |"
+                )
+            review_section = (
+                "\n\n## Human Review Approval Rates (cumulative)\n"
+                "This shows how often the human operator approved vs rejected candidates from each strategy.\n"
+                "Low approval rate = the strategy finds videos that look promising but the human doesn't want to transport them.\n"
+                + "\n".join(lines)
+            )
 
         reflection_prompt = (
             "You are reviewing your YouTube search performance from the latest discovery run.\n\n"
@@ -159,50 +181,65 @@ class StrategyGenerationSkill(Skill):
             "## This Run's Query Results\n"
             f"{query_yield_report}\n\n"
             "## Strategy Yield Rates (cumulative)\n"
-            f"{strategy_yield_stats}\n\n"
+            f"{strategy_yield_stats}"
+            f"{review_section}\n\n"
             "## Task\n"
-            "Analyze YouTube search effectiveness ONLY:\n"
+            "Analyze YouTube search effectiveness:\n"
             "1. Which query patterns found good videos? Which returned nothing?\n"
             "2. Why did empty/low-quality queries fail?\n"
             "3. Any new channels discovered worth following?\n"
-            "4. Should any strategies be retired based on low yield?\n\n"
+            "4. Should any strategies be retired based on low yield?\n"
+            "5. Which strategies have low human approval rates? Why might the human be rejecting those candidates?\n\n"
             "Update your YouTube search principles.\n\n"
             "Respond with JSON:\n"
             '{\n'
-            '  "updated_youtube_principles": "...",\n'
+            '  "updated_youtube_principles": "the full updated principles text (as a string)",\n'
             '  "new_strategies": [],\n'
             '  "channels_to_follow": [],\n'
             '  "retire": [],\n'
-            '  "analysis": "..."\n'
+            '  "analysis": "用中文写一段自然语言总结，概括本次反思的发现和改动理由，不要用JSON或列表格式"\n'
             '}'
         )
 
         response = self.backend.chat(
             messages=[
-                {"role": "system", "content": "You are analyzing search performance. Respond in JSON."},
+                {"role": "system", "content": "You are analyzing search performance. Respond in JSON. "
+                 "The 'analysis' field MUST be a natural-language summary paragraph in Chinese."},
                 {"role": "user", "content": reflection_prompt},
             ],
             temperature=0.3,
         )
         result = self._parse_response(response)
 
+        # Compute proposed new prompt without saving
+        proposed_prompt = None
         if result.get("updated_youtube_principles"):
             principles = result["updated_youtube_principles"]
             if isinstance(principles, list):
                 principles = "\n".join(str(p) for p in principles)
             elif not isinstance(principles, str):
                 principles = str(principles)
-            self.youtube_principles = principles
-            self._update_prompt(
-                {"system_prompt": self._default_system_prompt()},
-                changed_by="yield_reflection",
-                reason=result.get("analysis", "Yield reflection update"),
-            )
 
+            if apply:
+                self.youtube_principles = principles
+                self._update_prompt(
+                    {"system_prompt": self._default_system_prompt()},
+                    changed_by="yield_reflection",
+                    reason=result.get("analysis", "Yield reflection update"),
+                )
+            else:
+                # Build what the prompt WOULD look like
+                old_principles = self.youtube_principles
+                self.youtube_principles = principles
+                proposed_prompt = self._default_system_prompt()
+                self.youtube_principles = old_principles  # restore
+
+        result["proposed_system_prompt"] = proposed_prompt
+        result["current_system_prompt"] = self.system_prompt
         return result
 
-    def reflect_on_outcomes(self, outcomes: list) -> Optional[dict]:
-        """Loop 2 reflection: analyze Bilibili outcomes and update audience principles."""
+    def reflect_on_outcomes(self, outcomes: list, apply: bool = False) -> Optional[dict]:
+        """Loop 2 reflection: analyze Bilibili outcomes and propose audience principle updates."""
         if not outcomes:
             return None
 
@@ -222,34 +259,45 @@ class StrategyGenerationSkill(Skill):
             "Update your Bilibili audience principles.\n\n"
             "Respond with JSON:\n"
             '{\n'
-            '  "updated_bilibili_principles": "...",\n'
-            '  "scoring_insights": "...",\n'
-            '  "analysis": "..."\n'
+            '  "updated_bilibili_principles": "the full updated principles text (as a string)",\n'
+            '  "scoring_insights": "评分相关的洞察（中文自然语言）",\n'
+            '  "analysis": "用中文写一段自然语言总结，概括本次反思的发现和改动理由"\n'
             '}'
         )
 
         response = self.backend.chat(
             messages=[
-                {"role": "system", "content": "You are analyzing transport outcomes. Respond in JSON."},
+                {"role": "system", "content": "You are analyzing transport outcomes. Respond in JSON. "
+                 "The 'analysis' and 'scoring_insights' fields MUST be natural-language paragraphs in Chinese."},
                 {"role": "user", "content": reflection_prompt},
             ],
             temperature=0.3,
         )
         result = self._parse_response(response)
 
+        proposed_prompt = None
         if result.get("updated_bilibili_principles"):
             principles = result["updated_bilibili_principles"]
             if isinstance(principles, list):
                 principles = "\n".join(str(p) for p in principles)
             elif not isinstance(principles, str):
                 principles = str(principles)
-            self.bilibili_principles = principles
-            self._update_prompt(
-                {"system_prompt": self._default_system_prompt()},
-                changed_by="outcome_reflection",
-                reason=result.get("analysis", "Outcome reflection update"),
-            )
 
+            if apply:
+                self.bilibili_principles = principles
+                self._update_prompt(
+                    {"system_prompt": self._default_system_prompt()},
+                    changed_by="outcome_reflection",
+                    reason=result.get("analysis", "Outcome reflection update"),
+                )
+            else:
+                old_principles = self.bilibili_principles
+                self.bilibili_principles = principles
+                proposed_prompt = self._default_system_prompt()
+                self.bilibili_principles = old_principles
+
+        result["proposed_system_prompt"] = proposed_prompt
+        result["current_system_prompt"] = self.system_prompt
         return result
 
     # ── Formatting helpers ───────────────────────────────────────────────

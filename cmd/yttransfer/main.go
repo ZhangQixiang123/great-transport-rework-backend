@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -44,7 +45,9 @@ type config struct {
 	biliupTitlePrefix string
 	biliupDesc        string
 	biliupDynamic  string
-	annotationURL  string
+	mlServiceDir   string
+	llmBackend     string
+	logLevel       string
 }
 
 type dummyUploader struct {
@@ -52,7 +55,7 @@ type dummyUploader struct {
 }
 
 func (u dummyUploader) Upload(path string) error {
-	log.Printf("stub upload to %s: %s", u.platform, path)
+	slog.Info("stub upload", "platform", u.platform, "path", path)
 	return nil
 }
 
@@ -63,6 +66,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	app.SetupLogger(cfg.logLevel)
 
 	if _, err := app.LookPath("yt-dlp"); err != nil {
 		log.Fatal("yt-dlp not found in PATH; install it first (see README for Docker setup)")
@@ -77,11 +82,11 @@ func main() {
 		log.Fatal(err)
 	}
 	if jsWarn != "" {
-		log.Println(jsWarn)
+		slog.Warn(jsWarn)
 	}
 	format, warn := determineFormat(cfg.format)
 	if warn != "" {
-		log.Println(warn)
+		slog.Warn(warn)
 	}
 
 	ctx := context.Background()
@@ -92,7 +97,7 @@ func main() {
 	if err := store.EnsureSchema(ctx); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Initialized database")
+	slog.Info("initialized database", "path", cfg.dbPath)
 
 	downloader := app.NewYtDlpDownloader(time.Duration(cfg.sleepSeconds) * time.Second)
 	uploader, err := newUploaderFromConfig(cfg)
@@ -107,26 +112,29 @@ func main() {
 		JSRuntime:  jsRuntime,
 		Format:     format,
 	}
-	log.Println("Initialized controller")
+	slog.Info("initialized controller", "output_dir", cfg.outputDir, "platform", cfg.platform)
 
 	if cfg.httpAddr != "" {
 		// Graceful shutdown context
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		queue := app.NewJobQueue(controller, store, cfg.annotationURL)
+		queue := app.NewJobQueue(controller, store, app.SubtitleOptions{
+			MLServiceDir: cfg.mlServiceDir,
+			LLMBackend:   cfg.llmBackend,
+		})
 		queue.Start(ctx)
-		log.Println("Job queue started")
+		slog.Info("job queue started")
 
 		if err := app.ServeHTTP(cfg.httpAddr, controller, queue); err != nil {
 			log.Fatal(err)
 		}
-		log.Println("Server is initialized")
+		slog.Info("server initialized", "addr", cfg.httpAddr)
 		return
 	}
 
 	// Handle sync modes
-	log.Println("Handling downloading")
+	slog.Info("handling download", "video_id", cfg.videoID)
 	switch {
 	case cfg.videoID != "":
 		if err := controller.SyncVideo(ctx, cfg.videoID); err != nil {
@@ -194,7 +202,9 @@ func parseFlagsFrom(fs *flag.FlagSet, args []string) (config, error) {
 	fs.StringVar(&cfg.biliupTitlePrefix, "biliup-title-prefix", "", "prefix prepended to derived biliup video titles")
 	fs.StringVar(&cfg.biliupDesc, "biliup-desc", "Uploaded via yt-transfer", "description text template for biliup uploads")
 	fs.StringVar(&cfg.biliupDynamic, "biliup-dynamic", "", "dynamic/status text for biliup uploads (defaults to description)")
-	fs.StringVar(&cfg.annotationURL, "annotation-url", "", "Python annotation server URL for persona subtitle comments (e.g. http://127.0.0.1:8082)")
+	fs.StringVar(&cfg.mlServiceDir, "ml-service-dir", "", "path to ml-service directory (enables annotation generation)")
+	fs.StringVar(&cfg.llmBackend, "llm-backend", "ollama", "LLM backend for annotations (ollama, openai, anthropic)")
+	fs.StringVar(&cfg.logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err

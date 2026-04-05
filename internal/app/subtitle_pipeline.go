@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -19,11 +19,13 @@ import (
 
 // SubtitlePipelineConfig holds settings for the subtitle generation pipeline.
 type SubtitlePipelineConfig struct {
-	PythonBinary   string // path to python3 binary (default: "python3")
-	WhisperScript  string // path to whisper_transcribe.py
-	WhisperModel   string // whisper model size (default: "base")
-	CookiePath     string // path to biliup cookies.json
-	AnnotationURL  string // URL of Python annotation server (e.g. "http://127.0.0.1:8082")
+	PythonBinary    string // path to python3 binary (default: "python3")
+	WhisperScript   string // path to whisper_transcribe.py
+	WhisperModel    string // whisper model size (default: "base")
+	CookiePath      string // path to biliup cookies.json
+	AnnotationURL   string // deprecated: kept for backward compat but ignored
+	LLMBackend      string // LLM backend for annotations: ollama, openai, anthropic (default: "ollama")
+	MLServiceDir    string // path to ml-service directory (for running annotate_cli)
 }
 
 // SubtitleDraft holds generated subtitle + annotation data awaiting review.
@@ -37,7 +39,7 @@ type SubtitleDraft struct {
 // Does NOT upload — use ApproveSubtitle to publish after review.
 func RunSubtitlePipeline(ctx context.Context, cfg SubtitlePipelineConfig, store *SQLiteStore, jobID int64, videoPath, bvid string) error {
 	// Step 1: Transcribe
-	log.Printf("subtitle-pipeline: transcribing %s", filepath.Base(videoPath))
+	slog.Info("subtitle-pipeline: transcribing", "file", filepath.Base(videoPath))
 	englishSRT, err := whisperTranscribe(ctx, cfg, videoPath)
 	if err != nil {
 		return fmt.Errorf("transcription failed: %w", err)
@@ -45,7 +47,7 @@ func RunSubtitlePipeline(ctx context.Context, cfg SubtitlePipelineConfig, store 
 	if englishSRT == "" {
 		return fmt.Errorf("transcription produced empty result")
 	}
-	log.Printf("subtitle-pipeline: transcription complete, translating to Chinese")
+	slog.Info("subtitle-pipeline: transcription complete, translating to Chinese")
 
 	// Step 2: Translate
 	chineseSRT, err := translateSRT(englishSRT)
@@ -55,18 +57,18 @@ func RunSubtitlePipeline(ctx context.Context, cfg SubtitlePipelineConfig, store 
 	if chineseSRT == "" {
 		return fmt.Errorf("translation produced empty result")
 	}
-	log.Printf("subtitle-pipeline: translation complete")
+	slog.Info("subtitle-pipeline: translation complete")
 
 	// Step 3: Generate persona annotations (optional)
 	var annotations []bccEntry
-	if cfg.AnnotationURL != "" {
+	if cfg.MLServiceDir != "" {
 		videoTitle := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-		entries, err := fetchAnnotations(cfg.AnnotationURL, chineseSRT, videoTitle)
+		entries, err := fetchAnnotations(cfg, chineseSRT, videoTitle)
 		if err != nil {
-			log.Printf("subtitle-pipeline: annotation failed (non-fatal): %v", err)
+			slog.Warn("subtitle-pipeline: annotation failed (non-fatal)", "error", err)
 		} else {
 			annotations = entries
-			log.Printf("subtitle-pipeline: generated %d annotations", len(entries))
+			slog.Info("subtitle-pipeline: generated annotations", "count", len(entries))
 		}
 	}
 
@@ -85,7 +87,7 @@ func RunSubtitlePipeline(ctx context.Context, cfg SubtitlePipelineConfig, store 
 	}
 
 	_ = store.UpdateSubtitleStatus(ctx, jobID, "review")
-	log.Printf("subtitle-pipeline: draft saved for review (job=%d, bvid=%s, annotations=%d)", jobID, bvid, len(annotations))
+	slog.Info("subtitle-pipeline: draft saved for review", "job_id", jobID, "bvid", bvid, "annotations", len(annotations))
 	return nil
 }
 
@@ -104,60 +106,85 @@ func ApproveSubtitle(ctx context.Context, cfg SubtitlePipelineConfig, store *SQL
 	if err := uploadBilingualSubtitle(bvid, draft.EnglishSRT, draft.ChineseSRT, cfg.CookiePath); err != nil {
 		return fmt.Errorf("CC upload failed: %w", err)
 	}
-	log.Printf("subtitle-approve: uploaded bilingual CC for %s", bvid)
+	slog.Info("subtitle-approve: uploaded bilingual CC", "bvid", bvid)
 
 	// Post annotations as danmaku
 	if len(draft.Annotations) > 0 {
 		posted := postDanmakuBatch(bvid, draft.Annotations, cfg.CookiePath)
-		log.Printf("subtitle-approve: posted %d/%d danmaku for %s", posted, len(draft.Annotations), bvid)
+		slog.Info("subtitle-approve: posted danmaku", "posted", posted, "total", len(draft.Annotations), "bvid", bvid)
 	}
 
 	_ = store.UpdateSubtitleStatus(ctx, jobID, "completed")
 	return nil
 }
 
-// annotateRequest is the JSON body sent to the Python annotation server.
+// annotateRequest is the JSON input for the Python annotate_cli script.
 type annotateRequest struct {
 	SRTContent     string `json:"srt_content"`
 	VideoTitle     string `json:"video_title"`
 	MaxAnnotations int    `json:"max_annotations"`
 }
 
-// annotateResponse is the JSON response from the Python annotation server.
+// annotateResponse is the JSON output from the Python annotate_cli script.
 type annotateResponse struct {
 	Annotations []bccEntry `json:"annotations"`
 	Count       int        `json:"count"`
 }
 
-// fetchAnnotations calls the Python annotation server to get persona comments.
-func fetchAnnotations(annotationURL, chineseSRT, videoTitle string) ([]bccEntry, error) {
+// fetchAnnotations calls the Python annotate_cli subprocess to generate persona comments.
+func fetchAnnotations(cfg SubtitlePipelineConfig, chineseSRT, videoTitle string) ([]bccEntry, error) {
+	python := cfg.PythonBinary
+	if python == "" {
+		if runtime.GOOS == "windows" {
+			python = "python"
+		} else {
+			python = "python3"
+		}
+	}
+
+	backend := cfg.LLMBackend
+	if backend == "" {
+		backend = "ollama"
+	}
+
 	reqBody, err := json.Marshal(annotateRequest{
 		SRTContent:     chineseSRT,
 		VideoTitle:     videoTitle,
-		MaxAnnotations: 0, // 0 = auto-scale by video duration
+		MaxAnnotations: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	resp, err := http.Post(annotationURL+"/annotate", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("calling annotation server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading annotation response: %w", err)
+	// Use the venv python relative to MLServiceDir (which is cmd.Dir)
+	pythonPath := filepath.Join(".venv", "Scripts", "python")
+	if runtime.GOOS != "windows" {
+		pythonPath = filepath.Join(".venv", "bin", "python3")
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("annotation server HTTP %d: %s", resp.StatusCode, string(body))
+	args := []string{"-m", "app.annotate_cli", "--backend", backend}
+	cmd := exec.Command(pythonPath, args...)
+	cmd.Stdin = bytes.NewReader(reqBody)
+	cmd.Dir = cfg.MLServiceDir
+	cmd.Env = append(cmd.Environ(), "PYTHONUTF8=1")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	slog.Info("annotate: running CLI", "backend", backend)
+	if err := cmd.Run(); err != nil {
+		slog.Error("annotate: CLI failed", "stderr", stderr.String())
+		return nil, fmt.Errorf("annotate_cli failed: %w", err)
+	}
+
+	if stderr.Len() > 0 {
+		slog.Debug("annotate: CLI logs", "stderr", stderr.String())
 	}
 
 	var result annotateResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parsing annotation response: %w", err)
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return nil, fmt.Errorf("parsing annotation output: %w (raw: %s)", err, stdout.String()[:min(200, stdout.Len())])
 	}
 
 	return result.Annotations, nil
@@ -228,7 +255,7 @@ func uploadBilingualSubtitle(bvid, englishSRT, chineseSRT, cookiePath string) er
 		return fmt.Errorf("Bilibili subtitle API error: %s (code=%d)", result.Message, result.Code)
 	}
 
-	log.Printf("subtitle: uploaded bilingual CC for %s (cid=%d, entries=%d)", bvid, cid, len(bcc.Body))
+	slog.Info("subtitle: uploaded bilingual CC", "bvid", bvid, "cid", cid, "entries", len(bcc.Body))
 	return nil
 }
 
@@ -236,20 +263,20 @@ func uploadBilingualSubtitle(bvid, englishSRT, chineseSRT, cookiePath string) er
 func postDanmakuBatch(bvid string, entries []bccEntry, cookiePath string) int {
 	creds, err := loadBilibiliCookies(cookiePath)
 	if err != nil {
-		log.Printf("danmaku: failed to load cookies: %v", err)
+		slog.Error("danmaku: failed to load cookies", "error", err)
 		return 0
 	}
 
 	cid, err := getCID(bvid, creds.SESSDATA)
 	if err != nil {
-		log.Printf("danmaku: failed to get CID: %v", err)
+		slog.Error("danmaku: failed to get CID", "bvid", bvid, "error", err)
 		return 0
 	}
 
 	posted := 0
 	for _, e := range entries {
 		if err := postDanmaku(cid, bvid, e, creds); err != nil {
-			log.Printf("danmaku: failed to post at %.1fs: %v", e.From, err)
+			slog.Warn("danmaku: failed to post", "timestamp", e.From, "error", err)
 			continue
 		}
 		posted++
@@ -344,14 +371,14 @@ func whisperTranscribe(ctx context.Context, cfg SubtitlePipelineConfig, videoPat
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	log.Printf("subtitle-pipeline: running %s %v", python, args)
+	slog.Debug("subtitle-pipeline: running whisper", "python", python, "args", args)
 	if err := cmd.Run(); err != nil {
-		log.Printf("subtitle-pipeline: whisper stderr: %s", stderr.String())
+		slog.Error("subtitle-pipeline: whisper failed", "stderr", stderr.String())
 		return "", fmt.Errorf("whisper process failed: %w", err)
 	}
 
 	if stderr.Len() > 0 {
-		log.Printf("subtitle-pipeline: whisper: %s", stderr.String())
+		slog.Debug("subtitle-pipeline: whisper output", "stderr", stderr.String())
 	}
 
 	return stdout.String(), nil

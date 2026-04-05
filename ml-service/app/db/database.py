@@ -227,11 +227,31 @@ class Database:
         """)
         self._conn.commit()
 
+    def ensure_review_snapshot_table(self) -> None:
+        """Create review_snapshots table for crash recovery."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS review_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                candidates_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_review_snapshots_session
+            ON review_snapshots(session_id)
+        """)
+        self._conn.commit()
+
     def ensure_all_tables(self) -> None:
         """Create all tables."""
         self.ensure_skill_tables()
         self.ensure_persona_tables()
         self._migrate_persona_id()
+        self.ensure_review_snapshot_table()
 
     def _migrate_persona_id(self) -> None:
         """Add persona_id columns to legacy tables if missing.
@@ -419,6 +439,25 @@ class Database:
                 id DESC
             LIMIT ?
         """, (persona_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_review_stats_by_strategy(
+        self, persona_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate approval/rejection counts per strategy."""
+        if not self._conn:
+            raise RuntimeError("Database not connected")
+        rows = self._conn.execute("""
+            SELECT strategy_name,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN decision IN ('approved', 'revised') THEN 1 ELSE 0 END) as approved,
+                   SUM(CASE WHEN decision = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                   ROUND(100.0 * SUM(CASE WHEN decision IN ('approved', 'revised') THEN 1 ELSE 0 END) / COUNT(*), 1) as approval_rate
+            FROM review_decisions
+            WHERE persona_id = ?
+            GROUP BY strategy_name
+            ORDER BY total DESC
+        """, (persona_id,)).fetchall()
         return [dict(r) for r in rows]
 
     # ── Persona analyses ──────────────────────────────────────────────────

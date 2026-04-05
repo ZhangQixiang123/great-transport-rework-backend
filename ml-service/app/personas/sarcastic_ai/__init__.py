@@ -93,6 +93,19 @@ class SarcasticAI:
                 logger.warning("[%s] No queries generated, aborting", self.persona_id)
                 return result
 
+            # Filter by selected strategies (if specified)
+            if context.selected_strategies is not None:
+                before = len(queries)
+                queries = [q for q in queries
+                           if (q.get("strategy_name", "unknown") if isinstance(q, dict) else "unknown")
+                           in context.selected_strategies]
+                logger.info("[%s] Strategy filter: %d → %d queries (selected: %s)",
+                            self.persona_id, before, len(queries),
+                            ", ".join(sorted(context.selected_strategies)))
+                if not queries:
+                    logger.warning("[%s] No queries after strategy filter, aborting", self.persona_id)
+                    return result
+
             # ── Phase 2: Market Analysis ─────────────────────────────
             logger.info("[%s] Phase 2: Market analysis (skipped in dry-run for speed)", self.persona_id)
             # In dry-run mode, skip Bilibili API calls

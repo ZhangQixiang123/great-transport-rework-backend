@@ -110,7 +110,7 @@ func TestUploadJobCRUD(t *testing.T) {
 	}
 
 	// Create a job
-	jobID, err := store.CreateUploadJob(ctx, "dQw4w9WgXcQ", "Test Title", "Test description\n本视频搬运自YouTube", "搬运,音乐")
+	jobID, err := store.CreateUploadJob(ctx, "dQw4w9WgXcQ", "Test Title", "Test description\n本视频搬运自YouTube", "搬运,音乐", "", "")
 	if err != nil {
 		t.Fatalf("CreateUploadJob: %v", err)
 	}
@@ -200,9 +200,9 @@ func TestGetNextPendingJob(t *testing.T) {
 	}
 
 	// Create 3 jobs
-	id1, _ := store.CreateUploadJob(ctx, "vid1", "Title 1", "Desc 1", "")
-	id2, _ := store.CreateUploadJob(ctx, "vid2", "Title 2", "Desc 2", "")
-	store.CreateUploadJob(ctx, "vid3", "Title 3", "Desc 3", "")
+	id1, _ := store.CreateUploadJob(ctx, "vid1", "Title 1", "Desc 1", "", "", "")
+	id2, _ := store.CreateUploadJob(ctx, "vid2", "Title 2", "Desc 2", "", "", "")
+	store.CreateUploadJob(ctx, "vid3", "Title 3", "Desc 3", "", "", "")
 
 	// Should get first (lowest ID)
 	job, err = store.GetNextPendingJob(ctx)
@@ -262,7 +262,7 @@ func TestListRecentUploadJobs(t *testing.T) {
 
 	// Create 5 jobs
 	for i := 0; i < 5; i++ {
-		store.CreateUploadJob(ctx, "vid"+string(rune('A'+i)), "Title", "Desc", "")
+		store.CreateUploadJob(ctx, "vid"+string(rune('A'+i)), "Title", "Desc", "", "", "")
 	}
 
 	// List with limit 3 — should get 3 most recent (highest IDs first)
@@ -306,7 +306,7 @@ func TestUploadJobFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobID, _ := store.CreateUploadJob(ctx, "test123", "Title", "Desc", "")
+	jobID, _ := store.CreateUploadJob(ctx, "test123", "Title", "Desc", "", "", "")
 
 	// Mark as failed with error
 	if err := store.UpdateUploadJobStatus(ctx, jobID, "failed", "", "download timeout"); err != nil {
@@ -343,7 +343,7 @@ func TestUpdateUploadJobFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobID, _ := store.CreateUploadJob(ctx, "vid_files", "Title", "Desc", "")
+	jobID, _ := store.CreateUploadJob(ctx, "vid_files", "Title", "Desc", "", "", "")
 
 	filesJSON := `["/tmp/video.mp4"]`
 	if err := store.UpdateUploadJobFiles(ctx, jobID, filesJSON); err != nil {
@@ -388,8 +388,8 @@ func TestGetAllUploadedVideoIDs(t *testing.T) {
 	store.MarkUploaded(ctx, "vid2", "UC2")
 
 	// Add to upload_jobs table
-	store.CreateUploadJob(ctx, "vid3", "T", "D", "")
-	jobID, _ := store.CreateUploadJob(ctx, "vid4", "T", "D", "")
+	store.CreateUploadJob(ctx, "vid3", "T", "D", "", "", "")
+	jobID, _ := store.CreateUploadJob(ctx, "vid4", "T", "D", "", "", "")
 	store.UpdateUploadJobStatus(ctx, jobID, "failed", "", "error")
 
 	// vid1, vid2 from uploads; vid3 from jobs (pending); vid4 is failed so excluded
@@ -409,7 +409,7 @@ func TestGetAllUploadedVideoIDs(t *testing.T) {
 	}
 
 	// Test UNION dedup: add vid1 to jobs too — should appear once
-	store.CreateUploadJob(ctx, "vid1", "T", "D", "")
+	store.CreateUploadJob(ctx, "vid1", "T", "D", "", "", "")
 	ids, err = store.GetAllUploadedVideoIDs(ctx)
 	if err != nil {
 		t.Fatalf("GetAllUploadedVideoIDs (dedup): %v", err)
@@ -453,7 +453,7 @@ func TestFindActiveUploadJob(t *testing.T) {
 	}
 
 	// Create a pending job
-	jobID, _ := store.CreateUploadJob(ctx, "vid1", "T", "D", "")
+	jobID, _ := store.CreateUploadJob(ctx, "vid1", "T", "D", "", "", "")
 
 	job, err = store.FindActiveUploadJob(ctx, "vid1")
 	if err != nil {
@@ -478,7 +478,7 @@ func TestFindActiveUploadJob(t *testing.T) {
 	}
 
 	// Create a new completing job — should find that one
-	jobID2, _ := store.CreateUploadJob(ctx, "vid1", "T2", "D2", "")
+	jobID2, _ := store.CreateUploadJob(ctx, "vid1", "T2", "D2", "", "", "")
 	store.UpdateUploadJobStatus(ctx, jobID2, "downloading", "", "")
 
 	job, err = store.FindActiveUploadJob(ctx, "vid1")
@@ -511,7 +511,7 @@ func TestUpdateSubtitleStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobID, _ := store.CreateUploadJob(ctx, "vid_sub", "Title", "Desc", "")
+	jobID, _ := store.CreateUploadJob(ctx, "vid_sub", "Title", "Desc", "", "", "")
 
 	if err := store.UpdateSubtitleStatus(ctx, jobID, "generating"); err != nil {
 		t.Fatalf("UpdateSubtitleStatus: %v", err)
@@ -520,5 +520,78 @@ func TestUpdateSubtitleStatus(t *testing.T) {
 	job, _ := store.GetUploadJob(ctx, jobID)
 	if job.SubtitleStatus != "generating" {
 		t.Errorf("SubtitleStatus: got %q, want %q", job.SubtitleStatus, "generating")
+	}
+}
+
+func TestCreateUploadJobWithPersonaStrategy(t *testing.T) {
+	f, err := os.CreateTemp("", "test-persona-strategy-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := f.Name()
+	f.Close()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a job with persona_id and strategy_name
+	jobID, err := store.CreateUploadJob(ctx, "vid_persona", "Title", "Desc", "tags", "sarcastic_ai", "gaming_deep_dive")
+	if err != nil {
+		t.Fatalf("CreateUploadJob: %v", err)
+	}
+
+	job, err := store.GetUploadJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetUploadJob: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected job")
+	}
+	if job.PersonaID != "sarcastic_ai" {
+		t.Errorf("PersonaID: got %q, want %q", job.PersonaID, "sarcastic_ai")
+	}
+	if job.StrategyName != "gaming_deep_dive" {
+		t.Errorf("StrategyName: got %q, want %q", job.StrategyName, "gaming_deep_dive")
+	}
+
+	// Create a job without persona/strategy (backwards compat)
+	jobID2, err := store.CreateUploadJob(ctx, "vid_no_persona", "Title2", "Desc2", "", "", "")
+	if err != nil {
+		t.Fatalf("CreateUploadJob (no persona): %v", err)
+	}
+	job2, _ := store.GetUploadJob(ctx, jobID2)
+	if job2.PersonaID != "" {
+		t.Errorf("PersonaID should be empty, got %q", job2.PersonaID)
+	}
+	if job2.StrategyName != "" {
+		t.Errorf("StrategyName should be empty, got %q", job2.StrategyName)
+	}
+
+	// Verify list returns new fields
+	jobs, err := store.ListRecentUploadJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListRecentUploadJobs: %v", err)
+	}
+	found := false
+	for _, j := range jobs {
+		if j.ID == jobID {
+			found = true
+			if j.PersonaID != "sarcastic_ai" {
+				t.Errorf("Listed job PersonaID: got %q, want %q", j.PersonaID, "sarcastic_ai")
+			}
+			if j.StrategyName != "gaming_deep_dive" {
+				t.Errorf("Listed job StrategyName: got %q, want %q", j.StrategyName, "gaming_deep_dive")
+			}
+		}
+	}
+	if !found {
+		t.Error("job with persona not found in list")
 	}
 }

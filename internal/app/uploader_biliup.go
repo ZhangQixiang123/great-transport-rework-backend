@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,7 +94,7 @@ func (u *BiliupUploader) UploadWithResult(path string) (*UploadResult, error) {
 		args = append(args, "--tag", meta.Tag)
 	}
 	args = append(args, path)
-	log.Println("Uploading the video at path:" + path)
+	slog.Info("uploading video", "path", path)
 
 	cmd := exec.Command(binary, args...)
 
@@ -115,9 +115,9 @@ func (u *BiliupUploader) UploadWithResult(path string) (*UploadResult, error) {
 	result.BilibiliBvid = parseBvidFromOutput(output)
 
 	if result.BilibiliBvid != "" {
-		log.Printf("Upload successful, Bilibili bvid: %s", result.BilibiliBvid)
+		slog.Info("upload successful", "bvid", result.BilibiliBvid)
 	} else {
-		log.Println("Upload successful, but could not parse bvid from output")
+		slog.Warn("upload successful, but could not parse bvid from output")
 	}
 
 	return result, nil
@@ -246,7 +246,7 @@ func (p *prefixedLogger) Write(data []byte) (int, error) {
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			log.Printf("[%s] %s", p.prefix, line)
+			slog.Debug("subprocess output", "source", p.prefix, "line", line)
 		}
 	}
 	return len(data), nil

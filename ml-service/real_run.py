@@ -36,6 +36,8 @@ def main():
                         help="YouTube API quota budget")
     parser.add_argument("--backend", default="ollama",
                         help="LLM backend (ollama, openai, anthropic)")
+    parser.add_argument("--strategies", type=str, default=None,
+                        help="Comma-separated strategy names, or 'pick' for interactive selection")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -54,6 +56,27 @@ def main():
 
     logger = logging.getLogger("real_run")
 
+    # Strategy selection
+    selected_strategies = None
+    if args.strategies == "pick":
+        all_strats = db.list_strategies(active_only=True, persona_id="sarcastic_ai")
+        if not all_strats:
+            print("No strategies found. Run 'bootstrap' first.")
+            sys.exit(1)
+        print("\nAvailable strategies:")
+        for i, s in enumerate(all_strats, 1):
+            print(f"  {i}. {s['name']} (yield={s['yield_rate']:.0%})")
+        print(f"  0. All strategies")
+        raw = input("\nSelect (comma-separated numbers, e.g. 1,3,5): ").strip()
+        if raw == "0" or raw == "":
+            selected_strategies = None
+        else:
+            indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
+            selected_strategies = {all_strats[i]["name"] for i in indices if 0 <= i < len(all_strats)}
+            print(f"Selected: {', '.join(sorted(selected_strategies))}")
+    elif args.strategies:
+        selected_strategies = {s.strip() for s in args.strategies.split(",")}
+
     # Build context
     context = RunContext(
         dry_run=args.dry_run,
@@ -61,6 +84,7 @@ def main():
         no_review=args.no_review,
         go_url=args.go_url,
         quota_budget=args.quota_budget,
+        selected_strategies=selected_strategies,
     )
 
     # Select personas

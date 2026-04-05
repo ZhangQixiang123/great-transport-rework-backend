@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -284,6 +284,6 @@ func uploadSubtitleToBilibili(bvid, srtContent, cookiePath string) error {
 		return fmt.Errorf("Bilibili subtitle API error: %s (code=%d)", result.Message, result.Code)
 	}
 
-	log.Printf("subtitle: uploaded CC for %s (cid=%d, entries=%d)", bvid, cid, len(bcc.Body))
+	slog.Info("subtitle: uploaded CC", "bvid", bvid, "cid", cid, "entries", len(bcc.Body))
 	return nil
 }

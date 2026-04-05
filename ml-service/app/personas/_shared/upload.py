@@ -17,6 +17,8 @@ def submit_upload(
     title: str,
     description: str,
     tags: str = "",
+    persona_id: str = "",
+    strategy_name: str = "",
 ) -> Dict:
     """POST an upload job to the Go service (returns immediately).
 
@@ -28,6 +30,8 @@ def submit_upload(
         "title": title,
         "description": description,
         "tags": tags,
+        "persona_id": persona_id,
+        "strategy_name": strategy_name,
     }
     data = json.dumps(payload).encode("utf-8")
 

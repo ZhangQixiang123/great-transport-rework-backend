@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -27,10 +27,16 @@ type pipelineJob struct {
 	files []string
 }
 
+// SubtitleOptions configures optional subtitle pipeline settings.
+type SubtitleOptions struct {
+	MLServiceDir string // path to ml-service directory
+	LLMBackend   string // LLM backend for annotations (ollama, openai, anthropic)
+}
+
 // NewJobQueue creates a new job queue.
 // Subtitle generation is automatically enabled if a BiliupUploader with a
 // cookie path is configured on the controller.
-func NewJobQueue(controller *Controller, store *SQLiteStore, annotationURL ...string) *JobQueue {
+func NewJobQueue(controller *Controller, store *SQLiteStore, opts ...SubtitleOptions) *JobQueue {
 	q := &JobQueue{
 		controller: controller,
 		store:      store,
@@ -45,12 +51,14 @@ func NewJobQueue(controller *Controller, store *SQLiteStore, annotationURL ...st
 			WhisperModel:  "base",
 			CookiePath:    bu.opts.CookiePath,
 		}
-		if len(annotationURL) > 0 && annotationURL[0] != "" {
-			q.subtitleCfg.AnnotationURL = annotationURL[0]
-			log.Printf("queue: persona annotation enabled (url=%s)", annotationURL[0])
+		if len(opts) > 0 {
+			if opts[0].MLServiceDir != "" {
+				q.subtitleCfg.MLServiceDir = opts[0].MLServiceDir
+				q.subtitleCfg.LLMBackend = opts[0].LLMBackend
+				slog.Info("queue: annotation enabled (CLI mode)", "ml_service_dir", opts[0].MLServiceDir, "backend", opts[0].LLMBackend)
+			}
 		}
-		log.Printf("queue: subtitle pipeline enabled (model=%s, cookie=%s)",
-			q.subtitleCfg.WhisperModel, q.subtitleCfg.CookiePath)
+		slog.Info("queue: subtitle pipeline enabled", "model", q.subtitleCfg.WhisperModel, "cookie", q.subtitleCfg.CookiePath)
 	}
 
 	return q
@@ -75,7 +83,14 @@ func (q *JobQueue) Start(ctx context.Context) {
 }
 
 func (q *JobQueue) run(ctx context.Context) {
-	log.Println("Job queue pipeline started")
+	// Recover jobs orphaned by a previous crash (stuck in downloading/uploading).
+	if recovered, err := q.store.RecoverOrphanedJobs(ctx); err != nil {
+		slog.Error("queue: failed to recover orphaned jobs", "error", err)
+	} else if recovered > 0 {
+		slog.Warn("queue: recovered orphaned jobs", "count", recovered)
+	}
+
+	slog.Info("job queue pipeline started")
 
 	jobCh := make(chan UploadJob)
 	downloadedCh := make(chan pipelineJob)
@@ -97,7 +112,7 @@ func (q *JobQueue) run(ctx context.Context) {
 	close(jobCh)
 
 	wg.Wait()
-	log.Println("Job queue pipeline shut down")
+	slog.Info("job queue pipeline shut down")
 }
 
 // feedJobs drains pending jobs from DB on startup and on each notify signal.
@@ -126,7 +141,7 @@ func (q *JobQueue) drainPendingInto(ctx context.Context, jobCh chan<- UploadJob)
 
 		job, err := q.store.GetNextPendingJob(ctx)
 		if err != nil {
-			log.Printf("queue: failed to get next pending job: %v", err)
+			slog.Error("queue: failed to get next pending job", "error", err)
 			return
 		}
 		if job == nil {
@@ -135,7 +150,7 @@ func (q *JobQueue) drainPendingInto(ctx context.Context, jobCh chan<- UploadJob)
 
 		// Mark as downloading immediately to prevent re-fetch.
 		if err := q.store.UpdateUploadJobStatus(ctx, job.ID, "downloading", "", ""); err != nil {
-			log.Printf("queue: failed to mark job %d as downloading: %v", job.ID, err)
+			slog.Error("queue: failed to mark job as downloading", "job_id", job.ID, "error", err)
 			continue
 		}
 		job.Status = "downloading"
@@ -174,12 +189,12 @@ func (q *JobQueue) doDownload(parentCtx context.Context, job UploadJob) ([]strin
 	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Minute)
 	defer cancel()
 
-	log.Printf("queue: downloading job %d (video=%s)", job.ID, job.VideoID)
+	slog.Info("queue: downloading", "job_id", job.ID, "video_id", job.VideoID)
 
 	defer func() {
 		if r := recover(); r != nil {
 			errMsg := fmt.Sprintf("download panic: %v", r)
-			log.Printf("queue: job %d panicked in download: %s", job.ID, errMsg)
+			slog.Error("queue: job panicked in download", "job_id", job.ID, "error", errMsg)
 			_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 		}
 	}()
@@ -188,23 +203,23 @@ func (q *JobQueue) doDownload(parentCtx context.Context, job UploadJob) ([]strin
 	files, err := q.controller.Downloader.DownloadVideo(ctx, videoURL, q.controller.OutputDir, q.controller.JSRuntime, q.controller.Format)
 	if err != nil {
 		errMsg := fmt.Sprintf("download failed: %v", err)
-		log.Printf("queue: job %d download failed: %v", job.ID, err)
+		slog.Error("queue: download failed", "job_id", job.ID, "error", err)
 		_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 		return nil, false
 	}
 	if len(files) == 0 {
 		errMsg := fmt.Sprintf("no files downloaded for %s", job.VideoID)
-		log.Printf("queue: job %d: %s", job.ID, errMsg)
+		slog.Error("queue: no files downloaded", "job_id", job.ID, "video_id", job.VideoID)
 		_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 		return nil, false
 	}
 
-	log.Printf("queue: job %d downloaded %d file(s)", job.ID, len(files))
+	slog.Info("queue: download complete", "job_id", job.ID, "file_count", len(files))
 
 	// Store downloaded file paths in the job record.
 	if filesJSON, err := json.Marshal(files); err == nil {
 		if err := q.store.UpdateUploadJobFiles(parentCtx, job.ID, string(filesJSON)); err != nil {
-			log.Printf("queue: failed to store download files for job %d: %v", job.ID, err)
+			slog.Error("queue: failed to store download files", "job_id", job.ID, "error", err)
 		}
 	}
 
@@ -229,12 +244,12 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 	defer cancel()
 
 	job := pj.job
-	log.Printf("queue: uploading job %d (video=%s)", job.ID, job.VideoID)
+	slog.Info("queue: uploading", "job_id", job.ID, "video_id", job.VideoID)
 
 	defer func() {
 		if r := recover(); r != nil {
 			errMsg := fmt.Sprintf("upload panic: %v", r)
-			log.Printf("queue: job %d panicked in upload: %s", job.ID, errMsg)
+			slog.Error("queue: job panicked in upload", "job_id", job.ID, "error", errMsg)
 			_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 		}
 	}()
@@ -254,7 +269,7 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 	}
 
 	if err := q.store.UpdateUploadJobStatus(parentCtx, job.ID, "uploading", "", ""); err != nil {
-		log.Printf("queue: failed to update job %d status to uploading: %v", job.ID, err)
+		slog.Error("queue: failed to update status", "job_id", job.ID, "status", "uploading", "error", err)
 	}
 
 	var bvid string
@@ -263,7 +278,7 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 			result, err := bu.UploadWithResult(path)
 			if err != nil {
 				errMsg := fmt.Sprintf("upload failed: %v", err)
-				log.Printf("queue: job %d upload failed: %v", job.ID, err)
+				slog.Error("queue: upload failed", "job_id", job.ID, "error", err)
 				_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 				return
 			}
@@ -273,7 +288,7 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 		} else {
 			if err := q.controller.Uploader.Upload(path); err != nil {
 				errMsg := fmt.Sprintf("upload failed: %v", err)
-				log.Printf("queue: job %d upload failed: %v", job.ID, err)
+				slog.Error("queue: upload failed", "job_id", job.ID, "error", err)
 				_ = q.store.UpdateUploadJobStatus(parentCtx, job.ID, "failed", "", errMsg)
 				return
 			}
@@ -283,7 +298,7 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 	// Mark completed.
 	_ = q.store.UpdateUploadJobStatus(ctx, job.ID, "completed", bvid, "")
 	_ = q.store.MarkUploadedWithBvid(ctx, job.VideoID, "", bvid)
-	log.Printf("queue: job %d completed (bvid=%s)", job.ID, bvid)
+	slog.Info("queue: job completed", "job_id", job.ID, "bvid", bvid)
 
 	// Subtitle generation (non-blocking, runs after upload).
 	if q.subtitleCfg != nil && bvid != "" && len(pj.files) > 0 {
@@ -294,7 +309,7 @@ func (q *JobQueue) doUpload(parentCtx context.Context, pj pipelineJob) {
 func (q *JobQueue) doSubtitle(ctx context.Context, jobID int64, bvid, videoPath string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("queue: job %d subtitle panicked: %v", jobID, r)
+			slog.Error("queue: subtitle panicked", "job_id", jobID, "error", r)
 			_ = q.store.UpdateSubtitleStatus(ctx, jobID, "failed")
 		}
 	}()
@@ -305,10 +320,11 @@ func (q *JobQueue) doSubtitle(ctx context.Context, jobID int64, bvid, videoPath 
 	defer cancel()
 
 	if err := RunSubtitlePipeline(subtitleCtx, *q.subtitleCfg, q.store, jobID, videoPath, bvid); err != nil {
-		log.Printf("queue: job %d subtitle failed: %v", jobID, err)
+		slog.Error("queue: subtitle failed", "job_id", jobID, "error", err)
 		_ = q.store.UpdateSubtitleStatus(ctx, jobID, "failed")
+		_ = q.store.UpdateUploadJobStatus(ctx, jobID, "completed", bvid, err.Error())
 		return
 	}
 	// Pipeline sets status to "review" — awaiting human approval via /upload/subtitle-approve
-	log.Printf("queue: job %d subtitle draft ready for review", jobID)
+	slog.Info("queue: subtitle draft ready for review", "job_id", jobID)
 }

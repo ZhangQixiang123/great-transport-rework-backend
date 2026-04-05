@@ -22,6 +22,8 @@ type UploadJob struct {
 	DownloadFiles  string // JSON array of downloaded file paths
 	SubtitleStatus string // pending, generating, completed, failed
 	ErrorMessage   string
+	PersonaID      string
+	StrategyName   string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

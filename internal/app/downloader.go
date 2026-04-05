@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,7 +65,7 @@ func (d *YtDlpDownloader) DownloadVideo(ctx context.Context, videoURL, outputDir
 
 	res, err := runWithExtras(nil)
 	if shouldRetryWithDynamic(res.stderr, err) {
-		log.Println("yt-dlp indicated SABR fallback; retrying with --allow-dynamic-mpd --concurrent-fragments 1")
+		slog.Warn("yt-dlp indicated SABR fallback, retrying with dynamic mpd")
 		res, err = runWithExtras([]string{"--allow-dynamic-mpd", "--concurrent-fragments", "1"})
 	}
 	if err != nil {
@@ -98,6 +98,11 @@ func ytDlpEnv() []string {
 func runYtDlp(ctx context.Context, args []string) (ytDlpResult, error) {
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	cmd.Env = ytDlpEnv()
+	// On Windows, cancel the process group so child processes are also killed.
+	cmd.Cancel = func() error {
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = 5 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return ytDlpResult{}, err

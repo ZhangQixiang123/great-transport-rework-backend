@@ -59,8 +59,8 @@ func TestJobQueueProcessesJobs(t *testing.T) {
 	}
 
 	// Create 2 pending jobs.
-	id1, _ := store.CreateUploadJob(ctx, "vid1", "Title 1", "Desc", "")
-	id2, _ := store.CreateUploadJob(ctx, "vid2", "Title 2", "Desc", "")
+	id1, _ := store.CreateUploadJob(ctx, "vid1", "Title 1", "Desc", "", "", "")
+	id2, _ := store.CreateUploadJob(ctx, "vid2", "Title 2", "Desc", "", "", "")
 
 	// Create queue and start with cancellable context.
 	qCtx, cancel := context.WithCancel(ctx)
@@ -124,7 +124,7 @@ func TestJobQueueDrainsOnStartup(t *testing.T) {
 	}
 
 	// Create a pending job BEFORE starting the queue.
-	id1, _ := store.CreateUploadJob(ctx, "vid-startup", "Startup", "Desc", "")
+	id1, _ := store.CreateUploadJob(ctx, "vid-startup", "Startup", "Desc", "", "", "")
 
 	qCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -246,9 +246,9 @@ func TestJobQueuePipelineOverlap(t *testing.T) {
 	}
 
 	// Create 3 pending jobs.
-	id1, _ := store.CreateUploadJob(ctx, "pipe1", "Pipe 1", "Desc", "")
-	id2, _ := store.CreateUploadJob(ctx, "pipe2", "Pipe 2", "Desc", "")
-	id3, _ := store.CreateUploadJob(ctx, "pipe3", "Pipe 3", "Desc", "")
+	id1, _ := store.CreateUploadJob(ctx, "pipe1", "Pipe 1", "Desc", "", "", "")
+	id2, _ := store.CreateUploadJob(ctx, "pipe2", "Pipe 2", "Desc", "", "", "")
+	id3, _ := store.CreateUploadJob(ctx, "pipe3", "Pipe 3", "Desc", "", "", "")
 
 	qCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

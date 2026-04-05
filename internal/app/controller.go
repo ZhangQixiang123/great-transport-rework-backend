@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -33,17 +33,17 @@ func (c *Controller) SyncVideo(ctx context.Context, videoID string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no files downloaded for %s", videoID)
 	}
-	log.Printf("Video of id %s is downloaded", videoID)
+	slog.Info("video downloaded", "video_id", videoID)
 
 	for _, path := range files {
 		if err := c.Uploader.Upload(path); err != nil {
 			return err
 		}
-		log.Printf("Uploaded the file: %s", path)
+		slog.Info("uploaded file", "path", path)
 	}
 
 	if err := c.Store.MarkUploaded(ctx, videoID, ""); err != nil {
-		log.Printf("failed to mark uploaded for %s: %v", videoID, err)
+		slog.Error("failed to mark uploaded", "video_id", videoID, "error", err)
 		return err
 	}
 	return nil
@@ -71,7 +71,7 @@ func (c *Controller) UploadVideo(ctx context.Context, job UploadJob) (UploadJob,
 
 	// Update status to downloading
 	if err := c.Store.UpdateUploadJobStatus(ctx, job.ID, "downloading", "", ""); err != nil {
-		log.Printf("failed to update job %d status: %v", job.ID, err)
+		slog.Error("failed to update job status", "job_id", job.ID, "error", err)
 	}
 
 	// Download
@@ -92,7 +92,7 @@ func (c *Controller) UploadVideo(ctx context.Context, job UploadJob) (UploadJob,
 
 	// Update status to uploading
 	if err := c.Store.UpdateUploadJobStatus(ctx, job.ID, "uploading", "", ""); err != nil {
-		log.Printf("failed to update job %d status: %v", job.ID, err)
+		slog.Error("failed to update job status", "job_id", job.ID, "error", err)
 	}
 
 	// Upload — try UploadWithResult for bvid extraction

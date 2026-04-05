@@ -90,9 +90,9 @@ def generate_annotations(
 
     total_duration = blocks[-1]['to_sec'] if blocks else 0
 
-    # Auto-scale: ~1 annotation per 30s, clamped to [2, 8]
+    # Auto-scale: ~1 annotation per 20s, clamped to [3, 10]
     if max_annotations <= 0:
-        max_annotations = max(2, min(8, int(total_duration / 30)))
+        max_annotations = max(3, min(10, int(total_duration / 20)))
 
     prompt = (
         f"视频标题：{video_title}\n"
@@ -105,7 +105,8 @@ def generate_annotations(
         f"  - 哪里有逻辑矛盾、自相矛盾、话术陷阱、或者荒谬的地方？\n"
         f"  - 视频想让观众做什么（关注/点赞/购买）？这个诉求本身可笑吗？\n\n"
         f"第二步——写弹幕（写在 annotations 字段里）：\n"
-        f"  - 最多 {max_annotations} 条，只针对你分析出的具体荒谬点\n"
+        f"  - 必须至少 1 条，上限 {max_annotations} 条\n"
+        f"  - 宁缺毋滥：只在真正有槽点的地方写，没把握的不要硬凑\n"
         f"  - 每条 5-15 字，必须点明为什么荒谬，不是空洞的脏话堆砌\n"
         f"  - 严禁复读/改写字幕原文\n"
         f"  - 用人设语气但服务于内容：脏话要骂在点上\n\n"
